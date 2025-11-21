@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  antigravity2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: antigravity2api
+    ports:
+      - "${PORT:-8000}:8000"
+    env_file:
+      - .env
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health', timeout=5.0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+    # 可选：挂载 data 目录以持久化 token（VPS 部署推荐）
+    # 如果不挂载，系统会从环境变量读取配置（适合云平台部署）
+    volumes:
+      - ./data:/app/data
+
+    networks:
+      - antigravity-network
+
+networks:
+  antigravity-network:
+    driver: bridge
