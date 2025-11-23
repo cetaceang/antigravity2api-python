@@ -242,20 +242,20 @@ class RequestConverter:
     @staticmethod
     def convert_content_to_parts(content) -> List[Dict]:
         """
-        ?? OpenAI ?? content ???? Gemini ?? parts ???
+        将 OpenAI 的 content 字段转换为 Gemini 的 parts 数组
 
-        ???:
-        - ?????: "Hello"
-        - ????: [{"type": "text", "text": "Hello"}, {"type": "image_url", "image_url": {...}}]
+        支持:
+        - 纯文本: "Hello"
+        - 多模态: [{"type": "text", "text": "Hello"}, {"type": "image_url", "image_url": {...}}]
         """
         if isinstance(content, str):
-            # ?????
+            # 纯文本
             return [{"text": content}]
         elif isinstance(content, dict):
             text_value = RequestConverter.extract_text_value(content)
             return [{"text": text_value}] if text_value else [{"text": ""}]
         elif isinstance(content, list):
-            # ????????
+            # 多模态内容
             parts = []
             for item in content:
                 item_type = item.get("type")
@@ -263,11 +263,11 @@ class RequestConverter:
                     text_value = RequestConverter.extract_text_value(item.get("text"))
                     parts.append({"text": text_value})
                 elif item_type == "image_url":
-                    # ?? URL
+                    # 图片 URL
                     image_url = item.get("image_url", {})
                     url = image_url.get("url", "")
 
-                    # ???????? base64 ???????
+                    # 判断是内联 base64 还是外部链接
                     if url.startswith("data:image/"):
                         # data:image/jpeg;base64,/9j/4AAQ...
                         parts_split = url.split(",", 1)
@@ -281,7 +281,7 @@ class RequestConverter:
                                 }
                             })
                     else:
-                        # ?? URL??Gemini ????????????????????
+                        # 外部 URL，Gemini 需要先上传文件才能使用
                         parts.append({
                             "fileData": {
                                 "fileUri": url
@@ -289,7 +289,7 @@ class RequestConverter:
                         })
             return parts if parts else [{"text": ""}]
         else:
-            # ????????????????
+            # 其他类型，返回空文本
             return [{"text": ""}]
 
     @staticmethod
@@ -338,7 +338,7 @@ class RequestConverter:
 
     def normalize_schema(schema: Dict) -> Dict:
         """
-        ?? OpenAI ?? JSON Schema ??? type ??????? Google Gemini ????????
+        规范化 OpenAI 的 JSON Schema 中的 type 字段，确保符合 Google Gemini 的要求
         """
         if not isinstance(schema, dict):
             return schema
