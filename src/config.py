@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # Token 轮换配置
+    token_rotation_count: int = Field(
+        default=3,
+        alias="TOKEN_ROTATION_COUNT",
+        description="每个 token 使用多少次后切换到下一个"
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

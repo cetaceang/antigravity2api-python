@@ -18,6 +18,8 @@ class ProjectToken:
     refresh_token: str
     access_token: Optional[str] = None
     expires_at: Optional[int] = None
+    enabled: bool = True
+    disabled_reason: Optional[str] = None
 
 
 class TokenManager:
@@ -29,6 +31,11 @@ class TokenManager:
         self.current_index = 0
         self.refresh_lock = asyncio.Lock()
         self.oauth_config: Dict = {}
+        self.current_usage_count = 0  # 当前 token 使用次数
+
+        # 从 config 获取轮换次数
+        from src.config import settings
+        self.rotation_count = settings.token_rotation_count
 
         # 加载配置
         self.load_tokens()
@@ -52,7 +59,9 @@ class TokenManager:
                     project_id=p["project_id"],
                     refresh_token=p["refresh_token"],
                     access_token=p.get("access_token"),
-                    expires_at=p.get("expires_at")
+                    expires_at=p.get("expires_at"),
+                    enabled=p.get("enabled", True),
+                    disabled_reason=p.get("disabled_reason")
                 )
                 for p in projects_data
             ]
@@ -67,7 +76,7 @@ class TokenManager:
     def _load_from_env(self):
         """从环境变量加载配置（回退方案）"""
         try:
-            from config import settings
+            from src.config import settings
 
             # 加载 OAuth 配置
             self.oauth_config = {
@@ -83,7 +92,9 @@ class TokenManager:
                     project_id=p["project_id"],
                     refresh_token=p["refresh_token"],
                     access_token=p.get("access_token"),
-                    expires_at=p.get("expires_at")
+                    expires_at=p.get("expires_at"),
+                    enabled=p.get("enabled", True),
+                    disabled_reason=p.get("disabled_reason")
                 )
                 for p in projects_data
             ]
@@ -93,7 +104,15 @@ class TokenManager:
                 logger.warning("Please configure either data/tokens.json or PROJECTS environment variable.")
             else:
                 logger.info(f"Loaded {len(self.projects)} projects from environment variables")
-                logger.warning("Using environment variables - tokens will NOT be persisted!")
+
+                # 自动迁移到文件存储
+                try:
+                    self.save_tokens()
+                    logger.info(f"Successfully migrated configuration from environment variables to {self.data_file}")
+                    logger.info("Future token updates will be persisted automatically")
+                except Exception as e:
+                    logger.error(f"Failed to migrate configuration to file: {e}")
+                    logger.warning("Tokens will NOT be persisted - please check file permissions")
 
         except Exception as e:
             logger.error(f"Failed to load from environment: {e}")
@@ -112,7 +131,9 @@ class TokenManager:
                         "project_id": p.project_id,
                         "refresh_token": p.refresh_token,
                         "access_token": p.access_token,
-                        "expires_at": p.expires_at
+                        "expires_at": p.expires_at,
+                        "enabled": p.enabled,
+                        "disabled_reason": p.disabled_reason
                     }
                     for p in self.projects
                 ]
@@ -130,16 +151,44 @@ class TokenManager:
             logger.error(f"Failed to save tokens: {e}")
 
     def get_next_project(self) -> ProjectToken:
-        """Round Robin 获取下一个项目"""
+        """Round Robin 获取下一个项目（跳过已禁用的项目，支持使用次数轮换）"""
         if not self.projects:
             raise ValueError("No projects configured")
 
-        project = self.projects[self.current_index]
-        current = self.current_index
-        self.current_index = (self.current_index + 1) % len(self.projects)
+        # 获取所有启用的项目
+        enabled_projects = [p for p in self.projects if p.enabled]
+        if not enabled_projects:
+            raise ValueError("All projects are disabled")
 
-        logger.info(f"[Round Robin] 使用项目 [{current + 1}/{len(self.projects)}]: {project.project_id}")
-        return project
+        # 检查是否达到使用次数限制，需要切换
+        if self.current_usage_count >= self.rotation_count:
+            self.current_usage_count = 0
+            # 移动到下一个启用的项目
+            attempts = 0
+            while attempts < len(self.projects):
+                self.current_index = (self.current_index + 1) % len(self.projects)
+                if self.projects[self.current_index].enabled:
+                    break
+                attempts += 1
+
+        # 获取当前项目
+        attempts = 0
+        while attempts < len(self.projects):
+            project = self.projects[self.current_index]
+
+            if project.enabled:
+                self.current_usage_count += 1
+                logger.info(
+                    f"[Round Robin] 使用项目 [{self.current_index + 1}/{len(self.projects)}]: "
+                    f"{project.project_id} (使用次数: {self.current_usage_count}/{self.rotation_count})"
+                )
+                return project
+
+            self.current_index = (self.current_index + 1) % len(self.projects)
+            attempts += 1
+
+        # 理论上不会到达这里，因为上面已经检查了 enabled_projects
+        raise ValueError("All projects are disabled")
 
     def find_project(self, project_id: str) -> Optional[ProjectToken]:
         """查找指定项目"""
@@ -211,6 +260,13 @@ class TokenManager:
             return await self.refresh_access_token(project)
 
         return project.access_token
+
+    def disable_project(self, project: ProjectToken, reason: str):
+        """永久禁用项目"""
+        project.enabled = False
+        project.disabled_reason = reason
+        self.save_tokens()
+        logger.error(f"Disabled project {project.project_id}: {reason}")
 
     async def handle_auth_error(self, project: ProjectToken) -> str:
         """处理 401/403 错误，强制刷新 token"""

@@ -17,7 +17,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
-COPY *.py ./
+COPY src/ ./src/
+COPY scripts/ ./scripts/
+
+# 创建 data 目录
+RUN mkdir -p /app/data
 
 # 暴露端口
 EXPOSE 8000
@@ -27,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5.0)" || exit 1
 
 # 启动命令（固定端口 8000，通过 docker-compose 映射到宿主机）
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

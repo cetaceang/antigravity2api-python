@@ -117,7 +117,9 @@ class OAuthHandler(http.server.BaseHTTPRequestHandler):
                         'project_id': generate_project_id(),
                         'refresh_token': token_data.get('refresh_token'),
                         'access_token': token_data['access_token'],
-                        'expires_at': expires_at
+                        'expires_at': expires_at,
+                        'enabled': True,
+                        'disabled_reason': None
                     }
 
                     # 读取现有配置

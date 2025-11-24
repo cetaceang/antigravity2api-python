@@ -30,11 +30,15 @@ cp data/tokens.json.example data/tokens.json
       "project_id": "your-project-id",
       "refresh_token": "your_refresh_token_here",
       "access_token": null,
-      "expires_at": null
+      "expires_at": null,
+      "enabled": true,
+      "disabled_reason": null
     }
   ]
 }
 ```
+
+> 💡 **提示**：可以使用 `python scripts/oauth_server.py` 工具快速获取 refresh_token，详见 [Token 管理](#token-管理) 章节。
 
 ### 3. 配置环境变量
 
@@ -51,18 +55,21 @@ API_KEYS=["sk-custom-key-1","sk-custom-key-2"]
 # 服务配置（可选）
 HOST=0.0.0.0
 PORT=8000
+
+# Token 轮换配置（可选）
+TOKEN_ROTATION_COUNT=3  # 每个 token 使用多少次后切换，默认 3
 ```
 
 ### 4. 启动服务
 
 ```bash
-python main.py
+python -m src.main
 ```
 
 或使用 uvicorn：
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 服务启动后会自动：
@@ -70,6 +77,58 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 - 使用 refresh_token 自动获取 access_token
 - Token 过期时自动刷新
 - 多项目 Round Robin 负载均衡
+
+## Docker 部署
+
+### 使用 docker-compose（推荐）
+
+1. 准备配置文件：
+
+```bash
+# 创建 data 目录
+mkdir -p data
+
+# 配置 Token 文件
+cp data/tokens.json.example data/tokens.json
+# 编辑 data/tokens.json 填入配置
+
+# 配置环境变量
+cp .env.example .env
+# 编辑 .env 填入 API Keys
+```
+
+2. 启动服务：
+
+```bash
+docker-compose up -d
+```
+
+3. 查看日志：
+
+```bash
+docker-compose logs -f
+```
+
+4. 停止服务：
+
+```bash
+docker-compose down
+```
+
+### 使用 Docker 命令
+
+```bash
+# 构建镜像
+docker build -t antigravity2api .
+
+# 运行容器
+docker run -d \
+  --name antigravity2api \
+  -p 8000:8000 \
+  -v $(pwd)/data:/app/data \
+  --env-file .env \
+  antigravity2api
+```
 
 ## 使用示例
 
@@ -143,18 +202,57 @@ OpenAI 兼容的聊天补全端点。
 ## 项目结构
 
 ```
-antifravity2api/
-├── main.py              # FastAPI 主应用
-├── config.py            # 配置管理
-├── converter.py         # 协议转换逻辑
+antigravity2api-python/
+├── src/                 # 源代码目录
+│   ├── __init__.py     # 包初始化
+│   ├── main.py         # FastAPI 主应用
+│   ├── config.py       # 配置管理
+│   ├── converter.py    # 协议转换逻辑
+│   └── token_manager.py # Token 管理
+├── scripts/             # 工具脚本
+│   └── oauth_server.py # OAuth 服务器工具
+├── tests/               # 测试文件
+│   └── test_function_calling.py
+├── docs/                # 文档
+│   └── CLAUDE.md       # 技术方案文档
+├── data/                # 数据目录（运行时创建）
+│   └── tokens.json     # Token 配置文件
 ├── requirements.txt     # Python 依赖
 ├── .env.example         # 配置模板
 ├── .env                 # 实际配置（不提交）
-├── CLAUDE.md            # 技术方案文档
+├── Dockerfile           # Docker 镜像定义
+├── docker-compose.yml   # Docker Compose 配置
 └── README.md            # 本文档
 ```
 
 ## Token 管理
+
+### 使用 OAuth 工具获取 Token
+
+项目提供了 OAuth 授权工具，可以快速获取 refresh_token：
+
+**使用步骤：**
+
+1. **在项目根目录运行**（重要！）：
+```bash
+cd d:\桌面\antigravity2api-python
+python scripts/oauth_server.py
+```
+
+2. 脚本会自动：
+   - 启动本地 OAuth 回调服务器
+   - 打开浏览器进行 Google 授权
+   - 显示授权链接（如果浏览器未自动打开，手动复制链接）
+
+3. 在浏览器中完成授权后：
+   - Token 自动保存到 `data/tokens.json`
+   - 生成随机的 `project_id`
+   - 新增的项目默认为启用状态
+
+**注意事项：**
+- ⚠️ **必须在项目根目录运行**，否则文件会保存到错误位置
+- 如果已有 `data/tokens.json`，新 token 会追加到 `projects` 数组
+- 每次运行会添加一个新项目，支持多项目配置
 
 ### 自动刷新机制
 
@@ -162,6 +260,26 @@ antifravity2api/
 - Token 提前 5 分钟自动刷新，避免过期
 - 遇到 401/403 错误时自动刷新并重试
 - 更新后的 token 自动保存到 `data/tokens.json`
+
+### Token 禁用机制
+
+- 当 token 刷新后仍然失败（401/403）时，自动永久禁用该项目
+- 禁用状态保存到 `data/tokens.json`，重启后依然生效
+- Round Robin 轮询会自动跳过已禁用的项目
+- 记录禁用原因（`disabled_reason`），便于排查问题
+
+### Token 轮换策略
+
+- 每个 token 使用指定次数后自动切换到下一个 token
+- 默认使用 3 次后切换，可通过环境变量 `TOKEN_ROTATION_COUNT` 配置
+- 避免单个 token 被过度使用，分散请求负载
+- 日志显示当前使用次数（例如：`使用次数: 2/3`）
+
+**配置示例：**
+```env
+# 每个 token 使用 5 次后切换
+TOKEN_ROTATION_COUNT=5
+```
 
 ### 多项目支持
 
@@ -184,17 +302,25 @@ antifravity2api/
       "project_id": "project-1",
       "refresh_token": "refresh_token_1",
       "access_token": null,
-      "expires_at": null
+      "expires_at": null,
+      "enabled": true,
+      "disabled_reason": null
     },
     {
       "project_id": "project-2",
       "refresh_token": "refresh_token_2",
       "access_token": null,
-      "expires_at": null
+      "expires_at": null,
+      "enabled": true,
+      "disabled_reason": null
     }
   ]
 }
 ```
+
+**字段说明：**
+- `enabled`: 项目是否启用（默认 `true`）
+- `disabled_reason`: 禁用原因（禁用时自动记录）
 
 ## 注意事项
 

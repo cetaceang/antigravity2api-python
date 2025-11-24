@@ -7,9 +7,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 
-from config import settings
-from converter import RequestConverter, ResponseConverter
-from token_manager import get_token_manager, ProjectToken
+from src.config import settings
+from src.converter import RequestConverter, ResponseConverter
+from src.token_manager import get_token_manager, ProjectToken
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -158,6 +158,13 @@ async def handle_non_stream_request(
                 # 重试请求
                 response = await client.post(url, headers=headers, json=google_request)
 
+                # 如果重试后仍然是 401/403，禁用该项目
+                if response.status_code in (401, 403):
+                    token_manager.disable_project(
+                        project,
+                        f"Auth failed after token refresh: {response.status_code}"
+                    )
+
             if response.status_code != 200:
                 error_body = response.text
                 logger.error(f"Google API error {response.status_code}")
@@ -222,6 +229,18 @@ async def stream_google_to_openai(
                         headers=headers,
                         json=google_request
                     ) as retry_response:
+                        # 如果重试后仍然是 401/403，禁用该项目
+                        if retry_response.status_code in (401, 403):
+                            token_manager.disable_project(
+                                project,
+                                f"Auth failed after token refresh: {retry_response.status_code}"
+                            )
+                            error_body = await retry_response.aread()
+                            logger.error(f"Google API error {retry_response.status_code} (retry)")
+                            logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
+                            yield f"data: {{\"error\": \"Auth failed, project disabled\"}}\n\n"
+                            return
+
                         if retry_response.status_code != 200:
                             error_body = await retry_response.aread()
                             logger.error(f"Google API error {retry_response.status_code} (retry)")
@@ -299,6 +318,13 @@ async def list_models(authorization: Optional[str] = Header(None)):
                 access_token = await token_manager.handle_auth_error(project)
                 headers["Authorization"] = f"Bearer {access_token}"
                 response = await client.post(url, headers=headers, json=body)
+
+                # 如果重试后仍然是 401/403，禁用该项目
+                if response.status_code in (401, 403):
+                    token_manager.disable_project(
+                        project,
+                        f"Auth failed after token refresh: {response.status_code}"
+                    )
 
             if response.status_code != 200:
                 raise HTTPException(
