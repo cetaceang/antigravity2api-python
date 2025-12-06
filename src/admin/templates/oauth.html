@@ -16,17 +16,25 @@
         <div style="border: 1px solid #e9ecef; border-radius: 6px; padding: 16px; margin-bottom: 20px; background: #f8f9fa;">
             <h4 style="margin-bottom: 8px; color: #1a1a2e;">授权流程：</h4>
             <ol style="color: #6c757d; margin-left: 16px; line-height: 1.6;">
-                <li>点击下方按钮打开 Google 授权页面</li>
+                <li>复制下方授权链接，在浏览器中打开</li>
                 <li>完成授权后，复制浏览器地址栏的完整 URL</li>
                 <li>粘贴 URL 到下方输入框并提交</li>
             </ol>
             <p style="color: #6c757d; margin-top: 8px; font-size: 13px;">提示：state 仅 15 分钟有效，过期请重新开始。</p>
         </div>
 
-        <div style="text-align: center; margin-bottom: 20px;">
-            <a href="{{ auth_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="padding: 12px 32px; font-size: 16px;">
-                打开授权页面
-            </a>
+        <div style="margin-bottom: 16px;">
+            <label for="auth_link" style="display: block; margin-bottom: 6px; color: #333; font-weight: 600;">授权链接（复制到浏览器打开）</label>
+            <div style="display: flex; gap: 8px;">
+                <input
+                    id="auth_link"
+                    type="text"
+                    readonly
+                    value="{{ auth_url }}"
+                    style="flex: 1; padding: 10px; border: 1px solid #ced4da; border-radius: 6px; font-size: 14px;"
+                >
+                <button type="button" class="btn btn-primary" style="padding: 10px 16px;" onclick="copyAuthLink()">复制</button>
+            </div>
         </div>
 
         <form method="post" action="/admin/oauth/manual/complete" style="text-align: left;">
@@ -46,4 +54,23 @@
         </form>
     </div>
 </div>
+
+<script>
+function copyAuthLink() {
+    const input = document.getElementById('auth_link');
+    if (!input) return;
+    input.select();
+    input.setSelectionRange(0, 99999);
+    try {
+        const ok = document.execCommand('copy');
+        if (!ok && navigator.clipboard) {
+            navigator.clipboard.writeText(input.value);
+        }
+    } catch (e) {
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(input.value);
+        }
+    }
+}
+</script>
 {% endblock %}
