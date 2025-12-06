@@ -28,6 +28,9 @@ OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/experimentsandconfigs"
 ]
 
+# 固定使用本地回调，避免外部域名造成 redirect_uri_mismatch
+OAUTH_REDIRECT_URI = "http://localhost:8000/admin/oauth/callback"
+
 # 存储 OAuth state，带时效TTL
 STATE_TTL_SECONDS = 900  # 15 分钟
 oauth_states = {}
@@ -273,10 +276,8 @@ def consume_oauth_state(state: str) -> Optional[str]:
 
 
 def build_callback_url(request: Request) -> str:
-    """根据请求构造回调 URL"""
-    host = request.headers.get("host", "localhost:8000")
-    scheme = request.headers.get("x-forwarded-proto", "http")
-    return f"{scheme}://{host}/admin/oauth/callback"
+    """返回固定的本地回调 URL，防止外部域名导致 mismatch"""
+    return OAUTH_REDIRECT_URI
 
 
 async def handle_token_exchange(code: str, redirect_uri: str) -> str:
