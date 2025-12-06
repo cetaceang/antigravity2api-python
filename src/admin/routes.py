@@ -5,7 +5,8 @@ import urllib.parse
 import httpx
 import random
 import string
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 from pathlib import Path
 
 from fastapi import APIRouter, Request, Form, HTTPException
@@ -27,7 +28,8 @@ OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/experimentsandconfigs"
 ]
 
-# 存储 OAuth state
+# 存储 OAuth state，带时效TTL
+STATE_TTL_SECONDS = 900  # 15 分钟
 oauth_states = {}
 
 # 路由器
@@ -249,6 +251,67 @@ def generate_project_id() -> str:
     return f"{random_adj}-{random_noun}-{random_chars}"
 
 
+def create_oauth_state() -> str:
+    """生成 state 并记录时间"""
+    state = str(uuid.uuid4())
+    oauth_states[state] = datetime.now()
+    return state
+
+
+def consume_oauth_state(state: str) -> Optional[str]:
+    """校验并消费 state，返回错误消息或 None"""
+    created_at = oauth_states.get(state)
+    if not created_at:
+        return "无效的 state 参数"
+
+    if datetime.now() - created_at > timedelta(seconds=STATE_TTL_SECONDS):
+        del oauth_states[state]
+        return "state 已过期，请重新开始授权"
+
+    del oauth_states[state]
+    return None
+
+
+def build_callback_url(request: Request) -> str:
+    """根据请求构造回调 URL"""
+    host = request.headers.get("host", "localhost:8000")
+    scheme = request.headers.get("x-forwarded-proto", "http")
+    return f"{scheme}://{host}/admin/oauth/callback"
+
+
+async def handle_token_exchange(code: str, redirect_uri: str) -> str:
+    """用授权码交换 token 并保存项目，返回 project_id"""
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": OAUTH_CLIENT_ID,
+                "client_secret": OAUTH_CLIENT_SECRET,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code"
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+
+    if response.status_code != 200:
+        raise Exception(f"Token 交换失败: {response.text}")
+
+    token_data = response.json()
+    project_id = generate_project_id()
+    expires_at = int(datetime.now().timestamp()) + token_data.get("expires_in", 3599)
+
+    token_manager = get_token_manager()
+    token_manager.add_project(
+        project_id=project_id,
+        refresh_token=token_data.get("refresh_token"),
+        access_token=token_data.get("access_token"),
+        expires_at=expires_at
+    )
+
+    return project_id
+
+
 @admin_router.get("/oauth/start", response_class=HTMLResponse)
 async def oauth_start(request: Request):
     """生成 OAuth 授权链接"""
@@ -256,13 +319,10 @@ async def oauth_start(request: Request):
         return RedirectResponse(url="/admin/login", status_code=302)
 
     # 生成 state 防 CSRF
-    state = str(uuid.uuid4())
-    oauth_states[state] = datetime.now()
+    state = create_oauth_state()
 
     # 获取回调 URL
-    host = request.headers.get("host", "localhost:8000")
-    scheme = request.headers.get("x-forwarded-proto", "http")
-    callback_url = f"{scheme}://{host}/admin/oauth/callback"
+    callback_url = build_callback_url(request)
 
     # 构建授权 URL
     params = {
@@ -285,15 +345,13 @@ async def oauth_start(request: Request):
 @admin_router.get("/oauth/callback")
 async def oauth_callback(request: Request, code: str = None, state: str = None, error: str = None):
     """OAuth 回调处理"""
-    # 验证 state
-    if state not in oauth_states:
+    state_error = consume_oauth_state(state) if state else "无效的 state 参数"
+    if state_error:
         return templates.TemplateResponse("oauth_result.html", {
             "request": request,
             "success": False,
-            "message": "无效的 state 参数"
+            "message": state_error
         })
-
-    del oauth_states[state]
 
     if error:
         return templates.TemplateResponse("oauth_result.html", {
@@ -310,54 +368,77 @@ async def oauth_callback(request: Request, code: str = None, state: str = None, 
         })
 
     # 获取回调 URL
-    host = request.headers.get("host", "localhost:8000")
-    scheme = request.headers.get("x-forwarded-proto", "http")
-    callback_url = f"{scheme}://{host}/admin/oauth/callback"
+    callback_url = build_callback_url(request)
 
     # 用授权码换取 token
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "code": code,
-                    "client_id": OAUTH_CLIENT_ID,
-                    "client_secret": OAUTH_CLIENT_SECRET,
-                    "redirect_uri": callback_url,
-                    "grant_type": "authorization_code"
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
-            )
-
-            if response.status_code != 200:
-                return templates.TemplateResponse("oauth_result.html", {
-                    "request": request,
-                    "success": False,
-                    "message": f"Token 交换失败: {response.text}"
-                })
-
-            token_data = response.json()
-            project_id = generate_project_id()
-            expires_at = int(datetime.now().timestamp()) + token_data.get("expires_in", 3599)
-
-            # 保存到 TokenManager
-            token_manager = get_token_manager()
-            token_manager.add_project(
-                project_id=project_id,
-                refresh_token=token_data.get("refresh_token"),
-                access_token=token_data.get("access_token"),
-                expires_at=expires_at
-            )
-
-            return templates.TemplateResponse("oauth_result.html", {
-                "request": request,
-                "success": True,
-                "message": f"授权成功！已添加项目: {project_id}"
-            })
+        project_id = await handle_token_exchange(code, callback_url)
+        return templates.TemplateResponse("oauth_result.html", {
+            "request": request,
+            "success": True,
+            "message": f"授权成功！已添加项目: {project_id}"
+        })
 
     except Exception as e:
         return templates.TemplateResponse("oauth_result.html", {
             "request": request,
             "success": False,
             "message": f"发生错误: {str(e)}"
+        })
+
+
+@admin_router.post("/oauth/manual/complete", response_class=HTMLResponse)
+async def oauth_manual_complete(request: Request, callback_url: str = Form(...)):
+    """手工粘贴回调 URL 完成授权"""
+    if not get_current_user(request):
+        return RedirectResponse(url="/admin/login", status_code=302)
+
+    if not callback_url:
+        return templates.TemplateResponse("oauth_result.html", {
+            "request": request,
+            "success": False,
+            "message": "请粘贴完整的回调 URL"
+        })
+
+    try:
+        parsed_url = urllib.parse.urlparse(callback_url)
+        query = urllib.parse.parse_qs(parsed_url.query)
+        code = query.get("code", [None])[0]
+        state = query.get("state", [None])[0]
+
+        if not parsed_url.scheme or not parsed_url.netloc:
+            return templates.TemplateResponse("oauth_result.html", {
+                "request": request,
+                "success": False,
+                "message": "回调 URL 格式不正确"
+            })
+
+        if not code or not state:
+            return templates.TemplateResponse("oauth_result.html", {
+                "request": request,
+                "success": False,
+                "message": "URL 中缺少 code 或 state 参数"
+            })
+
+        state_error = consume_oauth_state(state)
+        if state_error:
+            return templates.TemplateResponse("oauth_result.html", {
+                "request": request,
+                "success": False,
+                "message": state_error
+            })
+
+        redirect_uri = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+        project_id = await handle_token_exchange(code, redirect_uri)
+
+        return templates.TemplateResponse("oauth_result.html", {
+            "request": request,
+            "success": True,
+            "message": f"授权成功！已添加项目: {project_id}"
+        })
+    except Exception as e:
+        return templates.TemplateResponse("oauth_result.html", {
+            "request": request,
+            "success": False,
+            "message": f"处理失败: {str(e)}"
         })
