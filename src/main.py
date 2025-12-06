@@ -10,6 +10,7 @@ from typing import Optional
 from src.config import settings
 from src.converter import RequestConverter, ResponseConverter
 from src.token_manager import get_token_manager, ProjectToken
+from src.admin.routes import admin_router
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -29,6 +30,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 注册管理面板路由
+app.include_router(admin_router, prefix="/admin")
 
 
 def validate_api_key(authorization: Optional[str]) -> bool:

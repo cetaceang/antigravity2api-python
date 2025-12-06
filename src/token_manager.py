@@ -268,6 +268,67 @@ class TokenManager:
         self.save_tokens()
         logger.error(f"Disabled project {project.project_id}: {reason}")
 
+    def enable_project(self, project_id: str) -> bool:
+        """启用项目"""
+        project = self.find_project(project_id)
+        if project:
+            project.enabled = True
+            project.disabled_reason = None
+            self.save_tokens()
+            logger.info(f"Enabled project {project_id}")
+            return True
+        return False
+
+    def toggle_project(self, project_id: str) -> Optional[bool]:
+        """切换项目启用状态，返回新状态"""
+        project = self.find_project(project_id)
+        if project:
+            project.enabled = not project.enabled
+            if project.enabled:
+                project.disabled_reason = None
+            self.save_tokens()
+            logger.info(f"Toggled project {project_id} to {'enabled' if project.enabled else 'disabled'}")
+            return project.enabled
+        return None
+
+    def delete_project(self, project_id: str) -> bool:
+        """删除项目"""
+        for i, project in enumerate(self.projects):
+            if project.project_id == project_id:
+                self.projects.pop(i)
+                self.save_tokens()
+                logger.info(f"Deleted project {project_id}")
+                return True
+        return False
+
+    def add_project(self, project_id: str, refresh_token: str, access_token: str = None, expires_at: int = None) -> ProjectToken:
+        """添加新项目"""
+        new_project = ProjectToken(
+            project_id=project_id,
+            refresh_token=refresh_token,
+            access_token=access_token,
+            expires_at=expires_at,
+            enabled=True
+        )
+        self.projects.append(new_project)
+        self.save_tokens()
+        logger.info(f"Added new project {project_id}")
+        return new_project
+
+    def get_all_projects(self) -> List[ProjectToken]:
+        """获取所有项目"""
+        return self.projects
+
+    def update_project_id(self, old_project_id: str, new_project_id: str) -> bool:
+        """更新项目 ID"""
+        project = self.find_project(old_project_id)
+        if project:
+            project.project_id = new_project_id
+            self.save_tokens()
+            logger.info(f"Updated project ID from {old_project_id} to {new_project_id}")
+            return True
+        return False
+
     async def handle_auth_error(self, project: ProjectToken) -> str:
         """处理 401/403 错误，强制刷新 token"""
         logger.warning(f"Auth error for {project.project_id}, forcing token refresh")

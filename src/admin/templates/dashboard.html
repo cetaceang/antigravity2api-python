@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}Token 管理{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Antigravity API 管理面板</h1>
+    <div>
+        <a href="/admin/oauth/start" class="btn btn-primary" style="margin-right: 10px;">+ 添加 Token</a>
+        <a href="/admin/logout">退出</a>
+    </div>
+</div>
+
+<div class="container">
+    <div class="card">
+        <h3 style="margin-bottom: 16px;">Token 列表</h3>
+
+        {% if projects %}
+        <table>
+            <thead>
+                <tr>
+                    <th>项目 ID</th>
+                    <th>状态</th>
+                    <th>Access Token</th>
+                    <th>过期时间</th>
+                    <th>禁用原因</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for project in projects %}
+                <tr class="token-row" data-project-id="{{ project.project_id }}">
+                    <td>
+                        <strong>{{ project.project_id }}</strong>
+                        <div style="margin-top: 4px;">
+                            <a href="javascript:void(0)" class="quota-toggle text-muted" style="font-size: 12px;" onclick="toggleQuota('{{ project.project_id }}')">
+                                ▶ 查看配额
+                            </a>
+                        </div>
+                    </td>
+                    <td>
+                        {% if project.enabled %}
+                        <span class="badge badge-success">启用</span>
+                        {% else %}
+                        <span class="badge badge-danger">禁用</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if project.access_token %}
+                        <span class="text-muted">{{ project.access_token[:20] }}...</span>
+                        {% else %}
+                        <span class="badge badge-warning">未获取</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if project.expires_at %}
+                            {% set expires = project.expires_at %}
+                            {% set now = current_time.timestamp() | int %}
+                            {% if expires > now %}
+                            <span class="text-muted">
+                                {{ (expires - now) // 60 }} 分钟后
+                            </span>
+                            {% else %}
+                            <span class="badge badge-warning">已过期</span>
+                            {% endif %}
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if project.disabled_reason %}
+                        <span class="text-muted">{{ project.disabled_reason }}</span>
+                        {% else %}
+                        <span class="text-muted">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="actions">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="openEditModal('{{ project.project_id }}')">编辑</button>
+                            <form method="POST" action="/admin/token/{{ project.project_id }}/toggle" style="display: inline;">
+                                {% if project.enabled %}
+                                <button type="submit" class="btn btn-warning btn-sm">禁用</button>
+                                {% else %}
+                                <button type="submit" class="btn btn-success btn-sm">启用</button>
+                                {% endif %}
+                            </form>
+                            <form method="POST" action="/admin/token/{{ project.project_id }}/delete" style="display: inline;" onsubmit="return confirm('确定要删除这个 Token 吗？此操作不可恢复！');">
+                                <button type="submit" class="btn btn-danger btn-sm">删除</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                <!-- 配额展开行 -->
+                <tr class="quota-row" id="quota-{{ project.project_id }}" style="display: none;">
+                    <td colspan="6" style="padding: 0;">
+                        <div class="quota-content" style="background: #f8f9fa; padding: 16px; border-top: 1px solid #eee;">
+                            <div class="quota-loading" style="text-align: center; color: #6c757d;">加载中...</div>
+                            <div class="quota-data" style="display: none;">
+                                <div style="display: flex; gap: 32px; flex-wrap: wrap;">
+                                    <div class="claude-quota" style="flex: 1; min-width: 300px;">
+                                        <h4 style="margin-bottom: 12px; color: #1a1a2e;">Claude 模型</h4>
+                                        <div class="model-list"></div>
+                                    </div>
+                                    <div class="gemini-quota" style="flex: 1; min-width: 300px;">
+                                        <h4 style="margin-bottom: 12px; color: #1a1a2e;">Gemini 模型</h4>
+                                        <div class="model-list"></div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="quota-error" style="display: none; color: #dc3545;"></div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div style="text-align: center; padding: 40px; color: #6c757d;">
+            <p>暂无 Token</p>
+            <p style="margin-top: 10px;">请按照下方说明添加 Token</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3 style="margin-bottom: 16px;">说明</h3>
+        <ul style="color: #6c757d; line-height: 1.8;">
+            <li><strong>启用/禁用</strong>：禁用的 Token 不会被 API 使用</li>
+            <li><strong>Access Token</strong>：会自动刷新，无需手动管理</li>
+            <li><strong>过期时间</strong>：显示 access_token 的剩余有效时间，过期后会自动刷新</li>
+        </ul>
+    </div>
+</div>
+
+<!-- 编辑模态框 -->
+<div id="editModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 24px; border-radius: 8px; width: 400px; max-width: 90%;">
+        <h3 style="margin-bottom: 16px;">编辑项目 ID</h3>
+        <form id="editForm" method="POST">
+            <div style="margin-bottom: 16px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 500;">新项目 ID</label>
+                <input type="text" name="new_project_id" id="newProjectId" required
+                    style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button type="button" class="btn" style="background: #6c757d; color: white;" onclick="closeEditModal()">取消</button>
+                <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function openEditModal(projectId) {
+    document.getElementById('editForm').action = '/admin/token/' + projectId + '/edit';
+    document.getElementById('newProjectId').value = projectId;
+    document.getElementById('editModal').style.display = 'block';
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+// 点击模态框外部关闭
+document.getElementById('editModal').addEventListener('click', function(e) {
+    if (e.target === this) {
+        closeEditModal();
+    }
+});
+
+// 配额展开/收起
+const quotaCache = {};
+
+async function toggleQuota(projectId) {
+    const quotaRow = document.getElementById('quota-' + projectId);
+    const toggleLink = document.querySelector(`tr[data-project-id="${projectId}"] .quota-toggle`);
+
+    if (quotaRow.style.display === 'none') {
+        // 展开
+        quotaRow.style.display = 'table-row';
+        toggleLink.innerHTML = '▼ 收起配额';
+
+        // 如果没有缓存，加载数据
+        if (!quotaCache[projectId]) {
+            await loadQuota(projectId);
+        }
+    } else {
+        // 收起
+        quotaRow.style.display = 'none';
+        toggleLink.innerHTML = '▶ 查看配额';
+    }
+}
+
+async function loadQuota(projectId) {
+    const quotaRow = document.getElementById('quota-' + projectId);
+    const loading = quotaRow.querySelector('.quota-loading');
+    const dataDiv = quotaRow.querySelector('.quota-data');
+    const errorDiv = quotaRow.querySelector('.quota-error');
+
+    loading.style.display = 'block';
+    dataDiv.style.display = 'none';
+    errorDiv.style.display = 'none';
+
+    try {
+        const response = await fetch('/admin/token/' + projectId + '/quota');
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '请求失败');
+        }
+
+        const data = await response.json();
+        quotaCache[projectId] = data;
+
+        // 渲染 Claude 模型
+        const claudeList = quotaRow.querySelector('.claude-quota .model-list');
+        claudeList.innerHTML = renderModelList(data.claude);
+
+        // 渲染 Gemini 模型
+        const geminiList = quotaRow.querySelector('.gemini-quota .model-list');
+        geminiList.innerHTML = renderModelList(data.gemini);
+
+        loading.style.display = 'none';
+        dataDiv.style.display = 'block';
+
+    } catch (e) {
+        loading.style.display = 'none';
+        errorDiv.style.display = 'block';
+        errorDiv.textContent = '加载失败: ' + e.message;
+    }
+}
+
+function renderModelList(models) {
+    if (!models || models.length === 0) {
+        return '<div class="text-muted" style="font-size: 13px;">无可用模型</div>';
+    }
+
+    return models.map(model => {
+        const percent = Math.round(model.remainingFraction * 100);
+        const barColor = percent > 50 ? '#2ec4b6' : (percent > 20 ? '#ff9f1c' : '#e63946');
+        const resetTime = model.resetTime ? formatResetTime(model.resetTime) : '-';
+
+        return `
+            <div style="margin-bottom: 10px; font-size: 13px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <span>${model.displayName || model.id}</span>
+                    <span class="text-muted">重置: ${resetTime}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="flex: 1; background: #e9ecef; border-radius: 4px; height: 8px; overflow: hidden;">
+                        <div style="width: ${percent}%; height: 100%; background: ${barColor};"></div>
+                    </div>
+                    <span style="min-width: 40px; text-align: right;">${percent}%</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function formatResetTime(isoString) {
+    if (!isoString) return '-';
+    const date = new Date(isoString);
+    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+</script>
+{% endblock %}

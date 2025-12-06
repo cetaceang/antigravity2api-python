@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}授权结果{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Antigravity API 管理面板</h1>
+    <a href="/admin/">返回面板</a>
+</div>
+
+<div class="container">
+    <div class="card" style="text-align: center; padding: 40px;">
+        {% if success %}
+        <div style="font-size: 48px; margin-bottom: 16px;">&#10004;</div>
+        <h2 style="color: #155724; margin-bottom: 16px;">授权成功</h2>
+        <p style="color: #6c757d; margin-bottom: 24px;">{{ message }}</p>
+        {% else %}
+        <div style="font-size: 48px; margin-bottom: 16px;">&#10008;</div>
+        <h2 style="color: #721c24; margin-bottom: 16px;">授权失败</h2>
+        <p style="color: #6c757d; margin-bottom: 24px;">{{ message }}</p>
+        {% endif %}
+
+        <a href="/admin/" class="btn btn-primary">返回管理面板</a>
+    </div>
+</div>
+{% endblock %}

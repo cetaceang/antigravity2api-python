@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}OAuth 授权{% endblock %}
+
+{% block content %}
+<div class="header">
+    <h1>Antigravity API 管理面板</h1>
+    <a href="/admin/">返回</a>
+</div>
+
+<div class="container">
+    <div class="card" style="text-align: center;">
+        <h3 style="margin-bottom: 20px;">添加新 Token</h3>
+
+        <p style="color: #6c757d; margin-bottom: 24px;">
+            点击下方按钮，使用 Google 账号授权。授权完成后会自动返回。
+        </p>
+
+        <a href="{{ auth_url }}" class="btn btn-primary" style="padding: 12px 32px; font-size: 16px;">
+            前往 Google 授权
+        </a>
+
+        <div style="margin-top: 32px; padding-top: 24px; border-top: 1px solid #eee; text-align: left;">
+            <h4 style="margin-bottom: 12px;">说明</h4>
+            <ul style="color: #6c757d; line-height: 1.8;">
+                <li>授权后，系统会自动获取 refresh_token 并保存</li>
+                <li>access_token 会自动刷新，无需手动管理</li>
+                <li>每个 Google 账号可以授权多次，生成不同的 project_id</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
