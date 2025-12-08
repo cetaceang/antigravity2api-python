@@ -196,6 +196,7 @@ OpenAI 兼容的聊天补全端点。
 - **Claude 带 `-thinking` 后缀**：启用思考输出，`includeThoughts=true`、`thinkingBudget=1024`。
 - **Claude 其它模型**：关闭思考输出，`includeThoughts=false`、`thinkingBudget=0`。
 - **其它模型**：目前不注入 `thinkingConfig`。
+- 当上游模型返回 `{"thought": true, "text": "..."}` 片段时，会在 OpenAI 响应中填充 `reasoning_content` 字段，方便客户端分别展示思考与正文。
 
 ### GET /v1/models
 

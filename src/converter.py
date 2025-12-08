@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 
 class RequestConverter:
     """请求格式转换器"""
+    DEFAULT_STOP_SEQUENCES = [
+        "<|user|>",
+        "<|bot|>",
+        "<|context_request|>",
+        "<|endoftext|>",
+        "<|end_of_turn|>"
+    ]
     SCHEMA_TYPE_MAPPING = {
         "string": "string",
         "number": "number",
@@ -62,6 +69,8 @@ class RequestConverter:
                 generation_config["stopSequences"] = [stop]
             elif isinstance(stop, list):
                 generation_config["stopSequences"] = stop
+        elif "stopSequences" not in generation_config:
+            generation_config["stopSequences"] = list(RequestConverter.DEFAULT_STOP_SEQUENCES)
         if "n" in openai_request:
             generation_config["candidateCount"] = openai_request["n"]
         if "response_format" in openai_request:
@@ -770,13 +779,26 @@ class ResponseConverter:
                 if "usageMetadata" in response:
                     usage_metadata = response["usageMetadata"]
 
-                # 提取内容（文本或函数调用）
-                delta = {}
+                # 提取内容（文本、思考或函数调用）
+                delta: Dict = {}
+                text_parts: List[str] = []
+                reasoning_parts: List[Dict] = []
 
                 for part in parts:
+                    if part.get("thought") is True:
+                        reasoning_entry = {
+                            "type": "text",
+                            "text": part.get("text", "")
+                        }
+                        thought_signature = part.get("thoughtSignature")
+                        if thought_signature:
+                            reasoning_entry["thought_signature"] = thought_signature
+                        reasoning_parts.append(reasoning_entry)
+                        continue
+
                     if "text" in part:
                         # 文本内容
-                        delta["content"] = part.get("text", "")
+                        text_parts.append(part.get("text", ""))
                     elif "functionCall" in part:
                         # 函数调用
                         func_call = part["functionCall"]
@@ -796,6 +818,11 @@ class ResponseConverter:
                         if thought_signature:
                             tool_call_entry["thought_signature"] = thought_signature
                         delta["tool_calls"].append(tool_call_entry)
+
+                if text_parts:
+                    delta["content"] = "".join(text_parts)
+                if reasoning_parts:
+                    delta["reasoning_content"] = reasoning_parts
 
                 # 构建 OpenAI 格式的 chunk
                 openai_chunk = {
@@ -896,12 +923,22 @@ class ResponseConverter:
 
             # 提取内容（文本或函数调用）
             message = {"role": "assistant"}
-            text_content = ""
+            text_parts: List[str] = []
+            reasoning_parts: List[Dict] = []
             tool_calls = []
 
             for part in parts:
-                if "text" in part:
-                    text_content += part.get("text", "")
+                if part.get("thought") is True:
+                    reasoning_entry = {
+                        "type": "text",
+                        "text": part.get("text", "")
+                    }
+                    thought_signature = part.get("thoughtSignature")
+                    if thought_signature:
+                        reasoning_entry["thought_signature"] = thought_signature
+                    reasoning_parts.append(reasoning_entry)
+                elif "text" in part:
+                    text_parts.append(part.get("text", ""))
                 elif "functionCall" in part:
                     func_call = part["functionCall"]
                     thought_signature = part.get("thoughtSignature") or func_call.get("thoughtSignature")
@@ -919,8 +956,10 @@ class ResponseConverter:
                     tool_calls.append(tool_call_entry)
 
             # 添加内容到 message
-            if text_content:
-                message["content"] = text_content
+            if text_parts:
+                message["content"] = "".join(text_parts)
+            if reasoning_parts:
+                message["reasoning_content"] = reasoning_parts
             if tool_calls:
                 message["tool_calls"] = tool_calls
 
