@@ -191,6 +191,12 @@ OpenAI 兼容的聊天补全端点。
 - `max_tokens` - 最大 token 数
 - `top_p` - Top-p 采样
 
+#### 思考配置策略
+- **Gemini 系列**：自动启用思考输出，`includeThoughts=true` 且 `thinkingBudget=-1`（由 Gemini 自行调度）。
+- **Claude 带 `-thinking` 后缀**：启用思考输出，`includeThoughts=true`、`thinkingBudget=1024`。
+- **Claude 其它模型**：关闭思考输出，`includeThoughts=false`、`thinkingBudget=0`。
+- **其它模型**：目前不注入 `thinkingConfig`。
+
 ### GET /v1/models
 
 获取可用模型列表。

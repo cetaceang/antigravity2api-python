@@ -69,6 +69,10 @@ class RequestConverter:
             if isinstance(response_format, dict) and response_format.get("type") == "json_object":
                 generation_config["responseMimeType"] = "application/json"
 
+        thinking_config = RequestConverter.determine_thinking_config(model)
+        if thinking_config:
+            generation_config["thinkingConfig"] = thinking_config
+
         # 构建 Google 请求
         google_request = {
             "project": project_id,
@@ -110,6 +114,33 @@ class RequestConverter:
         url_suffix = "/v1internal:streamGenerateContent?alt=sse" if stream else "/v1internal:generateContent"
 
         return google_request, url_suffix
+
+    @staticmethod
+    def determine_thinking_config(model: Optional[str]) -> Optional[Dict]:
+        if not model:
+            return None
+
+        model_name = str(model).lower()
+
+        if "gemini" in model_name:
+            return {
+                "includeThoughts": True,
+                "thinkingBudget": -1
+            }
+
+        if "claude" in model_name:
+            has_thinking_suffix = model_name.endswith("-thinking") or "-thinking-" in model_name
+            if has_thinking_suffix:
+                return {
+                    "includeThoughts": True,
+                    "thinkingBudget": 1024
+                }
+            return {
+                "includeThoughts": False,
+                "thinkingBudget": 0
+            }
+
+        return None
 
     @staticmethod
     def extract_system_instruction(messages: List[Dict]) -> Tuple[Optional[Dict], List[Dict]]:
