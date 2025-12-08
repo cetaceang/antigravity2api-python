@@ -782,18 +782,11 @@ class ResponseConverter:
                 # 提取内容（文本、思考或函数调用）
                 delta: Dict = {}
                 text_parts: List[str] = []
-                reasoning_parts: List[Dict] = []
+                reasoning_parts: List[str] = []
 
                 for part in parts:
                     if part.get("thought") is True:
-                        reasoning_entry = {
-                            "type": "text",
-                            "text": part.get("text", "")
-                        }
-                        thought_signature = part.get("thoughtSignature")
-                        if thought_signature:
-                            reasoning_entry["thought_signature"] = thought_signature
-                        reasoning_parts.append(reasoning_entry)
+                        reasoning_parts.append(part.get("text", ""))
                         continue
 
                     if "text" in part:
@@ -822,7 +815,7 @@ class ResponseConverter:
                 if text_parts:
                     delta["content"] = "".join(text_parts)
                 if reasoning_parts:
-                    delta["reasoning_content"] = reasoning_parts
+                    delta["reasoning_content"] = "".join(reasoning_parts)
 
                 # 构建 OpenAI 格式的 chunk
                 openai_chunk = {
@@ -924,19 +917,12 @@ class ResponseConverter:
             # 提取内容（文本或函数调用）
             message = {"role": "assistant"}
             text_parts: List[str] = []
-            reasoning_parts: List[Dict] = []
+            reasoning_parts: List[str] = []
             tool_calls = []
 
             for part in parts:
                 if part.get("thought") is True:
-                    reasoning_entry = {
-                        "type": "text",
-                        "text": part.get("text", "")
-                    }
-                    thought_signature = part.get("thoughtSignature")
-                    if thought_signature:
-                        reasoning_entry["thought_signature"] = thought_signature
-                    reasoning_parts.append(reasoning_entry)
+                    reasoning_parts.append(part.get("text", ""))
                 elif "text" in part:
                     text_parts.append(part.get("text", ""))
                 elif "functionCall" in part:
@@ -959,7 +945,7 @@ class ResponseConverter:
             if text_parts:
                 message["content"] = "".join(text_parts)
             if reasoning_parts:
-                message["reasoning_content"] = reasoning_parts
+                message["reasoning_content"] = "".join(reasoning_parts)
             if tool_calls:
                 message["tool_calls"] = tool_calls
 
