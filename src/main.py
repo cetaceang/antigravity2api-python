@@ -147,6 +147,7 @@ async def chat_completions(
 
 
 @app.post("/v1/models/{model}:generateContent")
+@app.post("/v1beta/models/{model}:generateContent")
 async def gemini_generate_content(
     model: str,
     request: Request,
@@ -176,6 +177,7 @@ async def gemini_generate_content(
 
 
 @app.post("/v1/models/{model}:streamGenerateContent")
+@app.post("/v1beta/models/{model}:streamGenerateContent")
 async def gemini_stream_generate_content(
     model: str,
     request: Request,
