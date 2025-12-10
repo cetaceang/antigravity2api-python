@@ -9,6 +9,11 @@ from typing import Optional
 
 from src.config import settings
 from src.converter import RequestConverter, ResponseConverter
+from src.gemini_converter import (
+    build_gemini_request,
+    proxy_gemini_non_stream,
+    stream_gemini_raw
+)
 from src.token_manager import get_token_manager, ProjectToken
 from src.admin.routes import admin_router
 
@@ -35,12 +40,22 @@ app.add_middleware(
 app.include_router(admin_router, prefix="/admin")
 
 
-def validate_api_key(authorization: Optional[str]) -> bool:
-    """验证 API Key"""
+def validate_api_key(
+    authorization: Optional[str],
+    x_goog_api_key: Optional[str] = None,
+    allow_x_goog: bool = False
+) -> bool:
+    """
+    验证 API Key。
+    - 默认仅支持 Authorization: Bearer <key>
+    - 若 allow_x_goog=True，则同时接受 X-Goog-Api-Key 头
+    """
+    if allow_x_goog and x_goog_api_key:
+        return settings.validate_api_key(x_goog_api_key)
+
     if not authorization:
         return False
 
-    # 提取 Bearer token
     if not authorization.startswith("Bearer "):
         return False
 
@@ -129,6 +144,67 @@ async def chat_completions(
             model=openai_request.get("model", "unknown"),
             project=project
         )
+
+
+@app.post("/v1/models/{model}:generateContent")
+async def gemini_generate_content(
+    model: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False)
+):
+    """
+    Gemini 原生非流式 generateContent 入口，透传标准 Gemini 请求并返回原生响应。
+    """
+    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+
+    token_manager = get_token_manager()
+    project = token_manager.get_next_project()
+
+    try:
+        google_request = build_gemini_request(model, body, project)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Request build failed: {str(e)}")
+
+    return await proxy_gemini_non_stream(google_request, project)
+
+
+@app.post("/v1/models/{model}:streamGenerateContent")
+async def gemini_stream_generate_content(
+    model: str,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False)
+):
+    """
+    Gemini 原生流式 generateContent 入口，透传标准 Gemini 请求并返回原始 SSE。
+    """
+    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True):
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    try:
+        body = await request.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+
+    token_manager = get_token_manager()
+    project = token_manager.get_next_project()
+
+    try:
+        google_request = build_gemini_request(model, body, project)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Request build failed: {str(e)}")
+
+    return StreamingResponse(
+        stream_gemini_raw(google_request, project),
+        media_type="text/event-stream"
+    )
 
 
 async def handle_non_stream_request(
