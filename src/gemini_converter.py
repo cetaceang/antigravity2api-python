@@ -40,6 +40,16 @@ def get_gemini_url(stream: bool) -> str:
     return f"{settings.google_api_base}{suffix}"
 
 
+def unwrap_response_payload(payload: Any) -> Any:
+    """
+    Antigravity 内部接口通常返回 {"response": {...}}，这里解包为官方 Gemini 公开格式。
+    若无 response 字段则原样返回。
+    """
+    if isinstance(payload, dict) and "response" in payload and isinstance(payload.get("response"), dict):
+        return payload["response"]
+    return payload
+
+
 async def proxy_gemini_non_stream(google_request: Dict[str, Any], project: ProjectToken) -> Dict[str, Any]:
     """
     直接调用 Gemini 非流式 generateContent，返回原生响应。
@@ -75,7 +85,7 @@ async def proxy_gemini_non_stream(google_request: Dict[str, Any], project: Proje
                 detail=f"Google API error: {response.text}"
             )
 
-        return response.json()
+        return unwrap_response_payload(response.json())
 
 
 async def stream_gemini_raw(
@@ -113,16 +123,28 @@ async def stream_gemini_raw(
                         logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
                         yield f"data: {{\"error\": \"Auth failed, project disabled\"}}\n\n"
                         return
-                    if retry_response.status_code != 200:
-                        error_body = await retry_response.aread()
-                        logger.error(f"Google API error {retry_response.status_code} (retry)")
-                        logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
-                        yield f"data: {{\"error\": \"Google API error: {retry_response.status_code}\"}}\n\n"
-                        return
+                        if retry_response.status_code != 200:
+                            error_body = await retry_response.aread()
+                            logger.error(f"Google API error {retry_response.status_code} (retry)")
+                            logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
+                            yield f"data: {{\"error\": \"Google API error: {retry_response.status_code}\"}}\n\n"
+                            return
                     async for line in retry_response.aiter_lines():
                         if not line:
                             continue
-                        yield line + "\n\n"
+                        try:
+                            payload = line
+                            if line.startswith("data:"):
+                                payload = line.split("data:", 1)[1].strip()
+                            if payload.strip() == "[DONE]":
+                                yield "data: [DONE]\n\n"
+                                continue
+                            data_obj = json.loads(payload)
+                            unwrapped = unwrap_response_payload(data_obj)
+                            yield f"data: {json.dumps(unwrapped, ensure_ascii=False)}\n\n"
+                        except Exception as exc:  # pragma: no cover
+                            logger.error(f"SSE unwrap error (retry): {exc}")
+                            yield line + "\n\n"
                 return
 
             if response.status_code != 200:
@@ -135,4 +157,16 @@ async def stream_gemini_raw(
             async for line in response.aiter_lines():
                 if not line:
                     continue
-                yield line + "\n\n"
+                try:
+                    payload = line
+                    if line.startswith("data:"):
+                        payload = line.split("data:", 1)[1].strip()
+                    if payload.strip() == "[DONE]":
+                        yield "data: [DONE]\n\n"
+                        continue
+                    data_obj = json.loads(payload)
+                    unwrapped = unwrap_response_payload(data_obj)
+                    yield f"data: {json.dumps(unwrapped, ensure_ascii=False)}\n\n"
+                except Exception as exc:  # pragma: no cover
+                    logger.error(f"SSE unwrap error: {exc}")
+                    yield line + "\n\n"
