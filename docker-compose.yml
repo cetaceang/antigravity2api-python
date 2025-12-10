@@ -2,9 +2,7 @@ version: '3.8'
 
 services:
   antigravity2api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/cetaceang/antigravity2api-python:latest
     container_name: antigravity2api
     ports:
       - "${PORT:-8000}:8000"
