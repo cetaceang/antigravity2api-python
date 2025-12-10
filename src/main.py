@@ -2,7 +2,7 @@
 import json
 import httpx
 import logging
-from fastapi import FastAPI, HTTPException, Header, Request
+from fastapi import FastAPI, HTTPException, Header, Request, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -43,13 +43,19 @@ app.include_router(admin_router, prefix="/admin")
 def validate_api_key(
     authorization: Optional[str],
     x_goog_api_key: Optional[str] = None,
-    allow_x_goog: bool = False
+    allow_x_goog: bool = False,
+    query_key: Optional[str] = None,
+    allow_query: bool = False
 ) -> bool:
     """
     验证 API Key。
     - 默认仅支持 Authorization: Bearer <key>
     - 若 allow_x_goog=True，则同时接受 X-Goog-Api-Key 头
+    - 若 allow_query=True，则接受查询参数 key=<key>
     """
+    if allow_query and query_key:
+        return settings.validate_api_key(query_key)
+
     if allow_x_goog and x_goog_api_key:
         return settings.validate_api_key(x_goog_api_key)
 
@@ -152,12 +158,13 @@ async def gemini_generate_content(
     model: str,
     request: Request,
     authorization: Optional[str] = Header(None),
-    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False)
+    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False),
+    key: Optional[str] = Query(None)
 ):
     """
     Gemini 原生非流式 generateContent 入口，透传标准 Gemini 请求并返回原生响应。
     """
-    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True):
+    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True, query_key=key, allow_query=True):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     try:
@@ -182,12 +189,13 @@ async def gemini_stream_generate_content(
     model: str,
     request: Request,
     authorization: Optional[str] = Header(None),
-    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False)
+    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False),
+    key: Optional[str] = Query(None)
 ):
     """
     Gemini 原生流式 generateContent 入口，透传标准 Gemini 请求并返回原始 SSE。
     """
-    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True):
+    if not validate_api_key(authorization, x_goog_api_key, allow_x_goog=True, query_key=key, allow_query=True):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     try:
