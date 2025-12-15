@@ -158,7 +158,7 @@ async def gemini_generate_content(
     model: str,
     request: Request,
     authorization: Optional[str] = Header(None),
-    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False),
+    x_goog_api_key: Optional[str] = Header(None, alias="x-goog-api-key"),
     key: Optional[str] = Query(None)
 ):
     """
@@ -189,7 +189,7 @@ async def gemini_stream_generate_content(
     model: str,
     request: Request,
     authorization: Optional[str] = Header(None),
-    x_goog_api_key: Optional[str] = Header(None, convert_underscores=False),
+    x_goog_api_key: Optional[str] = Header(None, alias="x-goog-api-key"),
     key: Optional[str] = Query(None)
 ):
     """
