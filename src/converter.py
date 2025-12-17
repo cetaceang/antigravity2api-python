@@ -142,7 +142,7 @@ class RequestConverter:
             if has_thinking_suffix:
                 return {
                     "includeThoughts": True,
-                    "thinkingBudget": 16000
+                    "thinkingBudget": 1024
                 }
             return {
                 "includeThoughts": False,
