@@ -2,6 +2,17 @@
 
 将 Google Gemini API (Antigravity) 包装成 OpenAI 标准格式的 API 代理服务。
 
+## 功能特性
+
+- 🔄 **OpenAI 兼容 API**：完全兼容 OpenAI SDK，无缝切换
+- 🎨 **图片生成**：支持 `-image` 后缀模型进行图像生成
+- 🧠 **思考模式**：支持 `thinking` 模型的推理过程展示
+- 🔧 **Function Calling**：完整支持多轮工具调用
+- 🔑 **多项目管理**：Round Robin 负载均衡，自动 Token 轮换
+- 🛡️ **自动刷新**：Token 过期自动刷新，失败自动禁用
+- 📊 **管理面板**：Web UI 管理 Token，查看配额，OAuth 授权
+- 🌐 **Gemini 原生 API**：同时支持 Gemini 原生格式透传
+
 ## 快速开始
 
 ### 1. 安装依赖
@@ -227,34 +238,91 @@ OpenAI 兼容的聊天补全端点。
 
 获取可用模型列表。
 
+### Gemini 原生 API 端点
+
+支持 Gemini 原生格式透传，兼容 Gemini SDK：
+
+```bash
+# 非流式
+POST /v1/models/{model}:generateContent
+POST /v1beta/models/{model}:generateContent
+
+# 流式
+POST /v1/models/{model}:streamGenerateContent
+POST /v1beta/models/{model}:streamGenerateContent
+```
+
+**认证方式**（三选一）：
+- `Authorization: Bearer <key>`
+- `X-Goog-Api-Key: <key>`
+- 查询参数 `?key=<key>`
+
 ### GET /health
 
 健康检查端点。
+
+## 管理面板
+
+提供 Web UI 管理界面，支持：
+
+- 📋 查看所有项目状态（启用/禁用、Token 过期时间）
+- 🔄 切换项目启用状态
+- ✏️ 编辑项目 ID
+- 🗑️ 删除项目
+- 📊 查看模型配额（Claude / Gemini）
+- 🔑 在线 OAuth 授权添加新项目
+
+### 访问管理面板
+
+```
+http://localhost:8000/admin/
+```
+
+**登录密码**：使用 `.env` 中配置的任意 `API_KEYS` 值登录。
+
+### 添加新项目
+
+1. 登录管理面板
+2. 点击「添加新项目」
+3. 点击「点击这里进行 Google 授权」
+4. 完成 Google 账号授权
+5. 自动返回并添加项目
 
 ## 项目结构
 
 ```
 antigravity2api-python/
-├── src/                 # 源代码目录
-│   ├── __init__.py     # 包初始化
-│   ├── main.py         # FastAPI 主应用
-│   ├── config.py       # 配置管理
-│   ├── converter.py    # 协议转换逻辑
-│   └── token_manager.py # Token 管理
-├── scripts/             # 工具脚本
-│   └── oauth_server.py # OAuth 服务器工具
-├── tests/               # 测试文件
-│   └── test_function_calling.py
-├── docs/                # 文档
-│   └── CLAUDE.md       # 技术方案文档
-├── data/                # 数据目录（运行时创建）
-│   └── tokens.json     # Token 配置文件
-├── requirements.txt     # Python 依赖
-├── .env.example         # 配置模板
-├── .env                 # 实际配置（不提交）
-├── Dockerfile           # Docker 镜像定义
-├── docker-compose.yml   # Docker Compose 配置
-└── README.md            # 本文档
+├── src/                      # 源代码目录
+│   ├── __init__.py          # 包初始化
+│   ├── main.py              # FastAPI 主应用
+│   ├── config.py            # 配置管理
+│   ├── converter.py         # OpenAI ↔ Google 协议转换
+│   ├── gemini_converter.py  # Gemini 原生 API 转换
+│   ├── token_manager.py     # Token 管理与自动刷新
+│   ├── image_storage.py     # 图片存储管理
+│   ├── signature_cache.py   # thoughtSignature 缓存
+│   ├── tool_name_cache.py   # 工具名称缓存
+│   └── admin/               # 管理面板
+│       ├── __init__.py
+│       ├── routes.py        # 管理面板路由
+│       └── templates/       # HTML 模板
+├── scripts/                  # 工具脚本
+│   └── oauth_server.py      # OAuth 服务器工具
+├── tests/                    # 测试文件
+│   ├── test_function_calling.py
+│   ├── test_image_support.py
+│   └── test_tool_calling_conversion.py
+├── docs/                     # 文档
+│   └── CLAUDE.md            # 技术方案文档
+├── data/                     # 数据目录（运行时创建）
+│   ├── tokens.json          # Token 配置文件
+│   └── images/              # 生成的图片
+├── requirements.txt          # Python 依赖
+├── .env.example              # 配置模板
+├── .env                      # 实际配置（不提交）
+├── Dockerfile                # Docker 镜像定义
+├── docker-compose.yml        # Docker Compose 配置
+└── README.md                 # 本文档
 ```
 
 ## Token 管理
@@ -357,15 +425,27 @@ TOKEN_ROTATION_COUNT=5
 ## 注意事项
 
 1. **Token 安全**：`data/tokens.json` 包含敏感信息，不要提交到版本控制
-2. **仅支持流式响应**：非流式响应暂未实现
-3. **模型名称透传**：不做模型名称映射，客户端看到的就是 Google 提供的原始模型名
+2. **模型名称透传**：不做模型名称映射，客户端看到的就是 Google 提供的原始模型名
+3. **管理面板安全**：生产环境建议通过反向代理限制 `/admin` 路径的访问
+
+## 环境变量参考
+
+| 变量名 | 默认值 | 说明 |
+|--------|--------|------|
+| `API_KEYS` | `["sk-test-key"]` | API 密钥列表（JSON 数组） |
+| `HOST` | `0.0.0.0` | 服务监听地址 |
+| `PORT` | `8000` | 服务监听端口 |
+| `TOKEN_ROTATION_COUNT` | `3` | Token 轮换次数 |
+| `IMAGE_DIR` | `data/images` | 图片存储目录 |
+| `IMAGE_BASE_URL` | ` ` | 图片 URL 前缀（空则使用请求域名） |
+| `MAX_IMAGES` | `10` | 最大图片保留数量 |
+| `SSE_HEARTBEAT_INTERVAL` | `15` | SSE 心跳间隔（秒） |
 
 ## 后续计划
 
-- [ ] 支持非流式响应
 - [ ] 完整的 usage 统计
-- [ ] 请求日志记录
-- [ ] 错误处理优化
+- [ ] 请求日志记录与分析
+- [ ] 管理面板认证增强（OAuth / 2FA）
 
 ## License
 
