@@ -49,6 +49,9 @@ logs/
 Thumbs.db
 desktop.ini
 
+# Node.js版本
+antigravity2api-nodejs/
+
 # Docker
 docker-compose.override.yml
 
