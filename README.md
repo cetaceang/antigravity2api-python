@@ -157,6 +157,20 @@ for chunk in response:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+### 图片生成（-image 模型）
+
+当 `model` 以 `-image` 结尾时，请求会自动切换为上游 `image_gen`，返回内容为 Markdown 图片链接（图片保存到本地 `data/images/`，并通过 `/images/*` 访问）。
+
+```python
+response = client.chat.completions.create(
+    model="gemini-3-pro-image",
+    messages=[{"role": "user", "content": "Draw a cute cat"}],
+    stream=False,
+)
+
+print(response.choices[0].message.content)
+```
+
 ### 使用 curl
 
 ```bash
@@ -192,11 +206,20 @@ OpenAI 兼容的聊天补全端点。
 - `top_p` - Top-p 采样
 
 #### 思考配置策略
-- **Gemini 系列**：自动启用思考输出，`includeThoughts=true` 且 `thinkingBudget=-1`（由 Gemini 自行调度）。
-- **Claude 带 `-thinking` 后缀**：启用思考输出，`includeThoughts=true`、`thinkingBudget=1024`。
-- **Claude 其它模型**：关闭思考输出，`includeThoughts=false`、`thinkingBudget=0`。
-- **其它模型**：目前不注入 `thinkingConfig`。
+- 服务端会在上游 `generationConfig.thinkingConfig` 中写入 `includeThoughts` 与 `thinkingBudget`。
+- 启用条件（对齐 Node 版本）：`model` 包含 `-thinking`，或为 `gemini-2.5-pro` / `gemini-3-pro-*` / `rev19-uic3-1p` / `gpt-oss-120b-medium`。
+- `thinkingBudget` 优先使用请求参数 `thinking_budget`（整数）；其次使用 `reasoning_effort`（low=1024, medium=16000, high=32000）；否则默认 1024；未启用时为 0。
 - 当上游模型返回 `{"thought": true, "text": "..."}` 片段时，会在 OpenAI 响应中填充 `reasoning_content` 字段（拼接后的纯文本），方便客户端分别展示思考与正文。
+
+#### 多轮工具调用（Function calling）与 thoughtSignature
+- 上游在思考/工具调用链路中会校验 `thoughtSignature`；缺失时，多轮 tool calling 可能无法继续。
+- 服务端会在 OpenAI 响应中透传 `thoughtSignature` 与 `tool_calls[].thoughtSignature`（camelCase），并按 `sessionId + model` 做进程内缓存，供下一轮请求缺字段时兜底补齐。
+- 兜底顺序：消息自带签名 → 缓存命中 → 内置常量（仅用于首轮/缺缓存场景）。
+- `tool_call_id` 贯通链路：OpenAI `tool_calls[].id` → 上游 `functionCall.id` → OpenAI `role=tool.tool_call_id` → 上游 `functionResponse.id`。
+
+#### 图片生成（-image 模型）
+- 当 `model` 以 `-image` 结尾时：上游强制走非流式 `generateContent`，请求体写入 `requestType=image_gen`。
+- 若客户端请求 `stream=true`：服务端会用 SSE 心跳维持连接，并在拿到上游结果后一次性返回包含图片 URL 的内容。
 
 ### GET /v1/models
 

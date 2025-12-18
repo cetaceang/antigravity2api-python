@@ -1,10 +1,14 @@
 """FastAPI 主应用 - OpenAI 兼容的 API 网关"""
+import asyncio
 import json
 import httpx
 import logging
+from contextlib import suppress
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Header, Request, Query
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 from src.config import settings
@@ -35,6 +39,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Image generation helpers.
+IMAGE_DIR = Path(getattr(settings, "image_dir", "data/images") or "data/images")
+MAX_IMAGES = int(getattr(settings, "max_images", 10) or 10)
+SSE_HEARTBEAT_INTERVAL = float(getattr(settings, "sse_heartbeat_interval", 15.0) or 15.0)
+IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/images", StaticFiles(directory=str(IMAGE_DIR)), name="images")
 
 # 注册管理面板路由
 app.include_router(admin_router, prefix="/admin")
@@ -95,6 +106,11 @@ async def chat_completions(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
+    model_name = openai_request.get("model", "unknown")
+    is_image_model = RequestConverter.is_image_model(model_name)
+    configured_base_url = (getattr(settings, "image_base_url", "") or "").strip()
+    image_base_url = configured_base_url or str(request.base_url).rstrip("/")
+
     # 使用 TokenManager 获取项目（Round Robin）
     token_manager = get_token_manager()
     project = token_manager.get_next_project()
@@ -110,7 +126,8 @@ async def chat_completions(
     try:
         google_request, url_suffix = RequestConverter.openai_to_google(
             openai_request,
-            project.project_id
+            project.project_id,
+            session_id=getattr(project, "session_id", None),
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Request conversion failed: {str(e)}")
@@ -130,16 +147,28 @@ async def chat_completions(
     is_stream = openai_request.get("stream", False)
 
     if is_stream:
-        # 流式响应
+        if is_image_model:
+            return StreamingResponse(
+                stream_image_to_openai(
+                    url=url,
+                    headers=headers,
+                    google_request=google_request,
+                    model=model_name,
+                    project=project,
+                    image_base_url=image_base_url,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
         return StreamingResponse(
             stream_google_to_openai(
                 url=url,
                 headers=headers,
                 google_request=google_request,
-                model=openai_request.get("model", "unknown"),
-                project=project
+                model=model_name,
+                project=project,
             ),
-            media_type="text/event-stream"
+            media_type="text/event-stream",
         )
     else:
         # 非流式响应
@@ -147,8 +176,9 @@ async def chat_completions(
             url=url,
             headers=headers,
             google_request=google_request,
-            model=openai_request.get("model", "unknown"),
-            project=project
+            model=model_name,
+            project=project,
+            image_base_url=image_base_url,
         )
 
 
@@ -222,14 +252,17 @@ async def handle_non_stream_request(
     headers: dict,
     google_request: dict,
     model: str,
-    project: ProjectToken
+    project: ProjectToken,
+    image_base_url: str,
 ):
     """
     非流式请求处理：Google → OpenAI
     """
     token_manager = get_token_manager()
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    timeout = 300.0 if (isinstance(google_request, dict) and google_request.get("requestType") == "image_gen") else 120.0
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             # 记录请求详情
             logger.debug(f"Sending request to Google API")
@@ -269,7 +302,11 @@ async def handle_non_stream_request(
             # 转换为 OpenAI 格式
             openai_response = ResponseConverter.google_non_stream_to_openai(
                 google_response,
-                model
+                model,
+                session_id=getattr(project, "session_id", None),
+                image_base_url=image_base_url,
+                image_dir=str(IMAGE_DIR),
+                max_images=MAX_IMAGES,
             )
 
             return openai_response
@@ -278,6 +315,108 @@ async def handle_non_stream_request(
             raise HTTPException(status_code=504, detail="Request timeout")
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+
+
+async def stream_image_to_openai(
+    url: str,
+    headers: dict,
+    google_request: dict,
+    model: str,
+    project: ProjectToken,
+    image_base_url: str,
+):
+    """
+    Wrap a non-stream image generation upstream response into OpenAI SSE chunks.
+    """
+    heartbeat = SSE_HEARTBEAT_INTERVAL
+    try:
+        heartbeat = float(heartbeat)
+    except Exception:
+        heartbeat = 15.0
+    if heartbeat <= 0:
+        heartbeat = 15.0
+
+    task = asyncio.create_task(
+        handle_non_stream_request(
+            url=url,
+            headers=headers,
+            google_request=google_request,
+            model=model,
+            project=project,
+            image_base_url=image_base_url,
+        )
+    )
+
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=heartbeat)
+            if task in done:
+                openai_response = task.result()
+
+                request_id = openai_response.get("id")
+                created = openai_response.get("created")
+                usage = openai_response.get("usage")
+
+                content = ""
+                finish_reason = "stop"
+                choices = openai_response.get("choices") or []
+                if choices:
+                    finish_reason = choices[0].get("finish_reason") or "stop"
+                    message = choices[0].get("message") or {}
+                    content = message.get("content") or ""
+
+                yield "data: " + json.dumps(
+                    {
+                        "id": request_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"content": content},
+                                "finish_reason": None,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ) + "\n\n"
+
+                final_chunk = {
+                    "id": request_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": finish_reason,
+                        }
+                    ],
+                }
+                if usage is not None:
+                    final_chunk["usage"] = usage
+
+                yield "data: " + json.dumps(final_chunk, ensure_ascii=False) + "\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            yield ": heartbeat\n\n"
+
+    except asyncio.CancelledError:
+        task.cancel()
+        with suppress(Exception):
+            await task
+        raise
+    except Exception as exc:
+        task.cancel()
+        with suppress(Exception):
+            await task
+        detail = getattr(exc, "detail", None) or str(exc)
+        yield "data: " + json.dumps({"error": detail}, ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
 
 async def stream_google_to_openai(
@@ -340,7 +479,8 @@ async def stream_google_to_openai(
 
                         async for chunk in ResponseConverter.google_sse_to_openai(
                             retry_response.aiter_lines(),
-                            model
+                            model,
+                            session_id=getattr(project, "session_id", None),
                         ):
                             yield chunk
                     return
@@ -355,7 +495,8 @@ async def stream_google_to_openai(
                 # 转换并流式输出
                 async for chunk in ResponseConverter.google_sse_to_openai(
                     response.aiter_lines(),
-                    model
+                    model,
+                    session_id=getattr(project, "session_id", None),
                 ):
                     yield chunk
 

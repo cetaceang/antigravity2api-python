@@ -51,6 +51,28 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0")
     port: int = Field(default=8000)
 
+    # Image generation (optional)
+    image_dir: str = Field(
+        default="data/images",
+        alias="IMAGE_DIR",
+        description="Directory for generated images"
+    )
+    image_base_url: str = Field(
+        default="",
+        alias="IMAGE_BASE_URL",
+        description="Base URL for image links; empty uses request base_url"
+    )
+    max_images: int = Field(
+        default=10,
+        alias="MAX_IMAGES",
+        description="Max number of images to keep on disk"
+    )
+    sse_heartbeat_interval: float = Field(
+        default=15.0,
+        alias="SSE_HEARTBEAT_INTERVAL",
+        description="SSE heartbeat interval seconds for stream image responses"
+    )
+
     # Token 轮换配置
     token_rotation_count: int = Field(
         default=3,

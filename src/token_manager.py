@@ -4,11 +4,21 @@ import time
 import asyncio
 import httpx
 import os
+import secrets
 from typing import List, Optional, Dict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def generate_session_id() -> str:
+    """
+    Generate a stable session id for the lifetime of the current process.
+
+    Aligned with NodeJS implementation: a negative integer string.
+    """
+    return str(-(secrets.randbelow(9_000_000_000_000_000_000 - 1) + 1))
 
 
 @dataclass
@@ -20,6 +30,7 @@ class ProjectToken:
     expires_at: Optional[int] = None
     enabled: bool = True
     disabled_reason: Optional[str] = None
+    session_id: str = field(default_factory=generate_session_id)
 
 
 class TokenManager:

@@ -2,12 +2,106 @@
 import copy
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Dict, List, Tuple, Optional, AsyncGenerator, AsyncIterator
 
+from src.image_storage import save_base64_image
+from src.signature_cache import (
+    get_reasoning_signature,
+    get_tool_signature,
+    set_reasoning_signature,
+    set_tool_signature,
+)
+from src.tool_name_cache import (
+    get_original_tool_name,
+    set_tool_name_mapping,
+)
+
 # 配置日志
 logger = logging.getLogger(__name__)
+
+
+# Thought signature constants are required by upstream validation logic for tool calling / thinking models.
+# These values are aligned with the NodeJS implementation.
+CLAUDE_THOUGHT_SIGNATURE = (
+    "RXVNQkNrZ0lDaEFDR0FJcVFLZGsvMnlyR0VTbmNKMXEyTFIrcWwyY2ozeHhoZHRPb0VOYWJ2VjZMSnE2MlBhcEQrUWdI"
+    "M3ZWeHBBUG9rbGN1aXhEbXprZTcvcGlkbWRDQWs5MWcrTVNERnRhbWJFOU1vZWZGc1pWSGhvTUxsMXVLUzRoT3BIaWwy"
+    "eXBJakNYa05EVElMWS9talprdUxvRjFtMmw5dnkrbENhSDNNM3BYNTM0K1lRZ0NaWTQvSUNmOXo4SkhZVzU2Sm1WcTZB"
+    "cVNRUURBRGVMV1BQRXk1Q0JsS0dCZXlNdHp2NGRJQVlGbDFSMDBXNGhqNHNiSWNKeGY0UGZVQTBIeE1mZjJEYU5BRXdr"
+    "WUJ4MmNzRFMrZGM1N1hnUlVNblpkZ0hTVHVNaGdod1lBUT09"
+)
+GEMINI_THOUGHT_SIGNATURE = (
+    "EqAHCp0HAXLI2nygRbdzD4Vgzxxi7tbM87zIRkNgPLqTj+Jxv9mY8Q0G87DzbTtvsIFhWB0RZMoEK6ntm5GmUe6ADtxH"
+    "k4zgHUs/FKqTu8tzUdPRDrKn3KCAtFW4LJqijZoFxNKMyQRmlgPUX4tGYE7pllD77UK6SjCwKhKZoSVZLMiPXP9YFktb"
+    "ida1Q5upXMrzG1t8abPmpFo983T/rgWlNqJp+Fb+bsoH0zuSpmU4cPKO3LIGsxBhvRhM/xydahZD+VpEX7TEJAN58z1Ro"
+    "mFyx9u0IR7ukwZr2UyoNA+uj8OChUDFupQsVwbm3XE1UAt22BGvfYIyyZ42fxgOgsFFY+AZ72AOufcmZb/8vIw3uEUgxH"
+    "czdl+NGLuS4Hsy/AAntdcH9sojSMF3qTf+ZK1FMav23SPxUBtU5T9HCEkKqQWRnMsVGYV1pupFisWo85hRLDTUipxVy9u"
+    "g1hN8JBYBNmGLf8KtWLhVp7Z11PIAZj3C6HzoVyiVeuiorwNrn0ZaaXNe+y5LHuDF0DNZhrIfnXByq6grLLSAv4fTLeCJ"
+    "vfGzTWWyZDMbVXNx1HgumKq8calP9wv33t0hfEaOlcmfGIyh1J/N+rOGR0WXcuZZP5/VsFR44S2ncpwTPT+MmR0PsjocD"
+    "enRY5m/X4EXbGGkZ+cfPnWoA64bn3eLeJTwxl9W1ZbmYS6kjpRGUMxExgRNOzWoGISddHCLcQvN7o50K8SF5k97rxiS5q"
+    "4rqDmqgRPXzQTQnZyoL3dCxScX9cvLSjNCZDcotonDBAWHfkXZ0/EmFiONQcLJdANtAjwoA44Mbn50gubrTsNd7d0Rm/hb"
+    "NEh/ZceUalV5MMcl6tJtahCJoybQMsnjWuBXl7cXiKmqAvxTDxIaBgQBYAo4FrbV4zQv35zlol+O3YiyjJn/U0oBeO5pEc"
+    "H1d0vnLgYP71jZVY2FjWRKnDR9aw4JhiuqAa+i0tupkBy+H4/SVwHADFQq6wcsL8qvXlwktJL9MIAoaXDkIssw6gKE9EuG"
+    "d7bSO9f+sA8CZ0I8LfJ3jcHUsE/3qd4pFrn5RaET56+1p8ZHZDDUQ0p1okApUCCYsC2WuL6O9P4fcg3yitAA/AfUUNjHKA"
+    "NE+ANneQ0efMG7fx9bvI+iLbXgPupApoov24JRkmhHsrJiu9bp+G/pImd2PNv7ArunJ6upl0VAUWtRyLWyGfdl6etGuY8v"
+    "VJ7JdWEQ8aWzRK3g6e+8YmDtP5DAfw=="
+)
+TOOL_THOUGHT_SIGNATURE = (
+    "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"
+    "+48="
+)
+DEFAULT_THOUGHT_SIGNATURE = CLAUDE_THOUGHT_SIGNATURE
+
+
+def get_thought_signature_for_model(model: Optional[str]) -> str:
+    model_name = (model or "").lower()
+    if "gemini" in model_name:
+        return GEMINI_THOUGHT_SIGNATURE
+    if "claude" in model_name:
+        return CLAUDE_THOUGHT_SIGNATURE
+    return DEFAULT_THOUGHT_SIGNATURE
+
+
+def get_tool_thought_signature_for_model(model: Optional[str]) -> str:
+    model_name = (model or "").lower()
+    if "claude" in model_name:
+        return CLAUDE_THOUGHT_SIGNATURE
+    return TOOL_THOUGHT_SIGNATURE
+
+
+def sanitize_tool_name(name: Optional[str]) -> str:
+    if not isinstance(name, str) or not name:
+        return "tool"
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]", "_", name)
+    cleaned = re.sub(r"^_+|_+$", "", cleaned)
+    if not cleaned:
+        cleaned = "tool"
+    return cleaned[:128]
 
 
 class RequestConverter:
@@ -29,11 +123,58 @@ class RequestConverter:
         "null": "null"
     }
     SUPPORTED_SCHEMA_TYPES = set(SCHEMA_TYPE_MAPPING.values())
+    REASONING_EFFORT_MAP = {
+        "low": 1024,
+        "medium": 16000,
+        "high": 32000,
+    }
+    EXCLUDED_SCHEMA_KEYS = {
+        "$schema",
+        "additionalProperties",
+        "minLength",
+        "maxLength",
+        "minItems",
+        "maxItems",
+        "uniqueItems",
+        "exclusiveMaximum",
+        "exclusiveMinimum",
+        "const",
+        "anyOf",
+        "oneOf",
+        "allOf",
+        "any_of",
+        "one_of",
+        "all_of",
+    }
+
+    @staticmethod
+    def is_image_model(model: Optional[str]) -> bool:
+        if not model:
+            return False
+        return str(model).lower().endswith("-image")
+
+    @staticmethod
+    def prepare_image_request(google_request: Dict) -> Dict:
+        if not isinstance(google_request, dict):
+            return google_request
+
+        request = google_request.get("request")
+        if not isinstance(request, dict):
+            return google_request
+
+        google_request["requestType"] = "image_gen"
+        request["generationConfig"] = {"candidateCount": 1}
+
+        request.pop("systemInstruction", None)
+        request.pop("tools", None)
+        request.pop("toolConfig", None)
+        return google_request
 
     @staticmethod
     def openai_to_google(
         openai_request: Dict,
-        project_id: str
+        project_id: str,
+        session_id: Optional[str] = None,
     ) -> Tuple[Dict, str]:
         """
         将 OpenAI 格式请求转换为 Google Gemini 格式
@@ -43,9 +184,16 @@ class RequestConverter:
         messages = openai_request.get("messages", [])
         model = openai_request.get("model", "gemini-2.5-flash")
         stream = openai_request.get("stream", False)
+        is_image_model = RequestConverter.is_image_model(model)
+        enable_thinking = RequestConverter.is_enable_thinking(model)
 
         # 提取 system 消息和普通消息
-        system_instruction, contents = RequestConverter.extract_system_instruction(messages)
+        system_instruction, contents = RequestConverter.extract_system_instruction(
+            messages,
+            model=model,
+            session_id=session_id,
+            enable_thinking=enable_thinking,
+        )
         RequestConverter.validate_contents_sequence(contents)
 
         # 构建 generationConfig
@@ -78,9 +226,12 @@ class RequestConverter:
             if isinstance(response_format, dict) and response_format.get("type") == "json_object":
                 generation_config["responseMimeType"] = "application/json"
 
-        thinking_config = RequestConverter.determine_thinking_config(model)
-        if thinking_config:
-            generation_config["thinkingConfig"] = thinking_config
+        generation_config["thinkingConfig"] = {
+            "includeThoughts": enable_thinking,
+            "thinkingBudget": RequestConverter.get_thinking_budget(openai_request, enable_thinking),
+        }
+        if enable_thinking and "claude" in str(model).lower():
+            generation_config.pop("topP", None)
 
         # 构建 Google 请求
         google_request = {
@@ -95,6 +246,9 @@ class RequestConverter:
         # 添加 userAgent（固定为 "antigravity"）
         google_request["userAgent"] = "antigravity"
 
+        if session_id:
+            google_request["request"]["sessionId"] = session_id
+
         # 添加 systemInstruction
         if system_instruction:
             google_request["request"]["systemInstruction"] = system_instruction
@@ -103,24 +257,26 @@ class RequestConverter:
         if generation_config:
             google_request["request"]["generationConfig"] = generation_config
 
-        # 转换 tools（函数调用）
-        if "tools" in openai_request:
-            google_tools = RequestConverter.convert_tools(openai_request["tools"])
-            if google_tools:
-                google_request["request"]["tools"] = google_tools
+        # Convert tools (function calling).
+        openai_tools = openai_request.get("tools") or []
+        google_tools = RequestConverter.convert_tools(openai_tools, session_id=session_id, model=model)
+        if google_tools:
+            google_request["request"]["tools"] = google_tools
+            google_request["request"]["toolConfig"] = {
+                "functionCallingConfig": {"mode": "VALIDATED"}
+            }
 
-                # 添加 toolConfig（必需！）
-                tool_choice = openai_request.get("tool_choice", "auto")
-                tool_config = RequestConverter.convert_tool_choice(tool_choice, openai_request.get("tools", []))
-                if tool_config:
-                    google_request["request"]["toolConfig"] = tool_config
+        if is_image_model:
+            google_request = RequestConverter.prepare_image_request(google_request)
 
         RequestConverter.log_conversion_summary(openai_request, google_request)
 
         # URL 后缀
         # 流式：使用 streamGenerateContent + alt=sse
         # 非流式：使用 generateContent
-        url_suffix = "/v1internal:streamGenerateContent?alt=sse" if stream else "/v1internal:generateContent"
+        url_suffix = "/v1internal:generateContent" if is_image_model else (
+            "/v1internal:streamGenerateContent?alt=sse" if stream else "/v1internal:generateContent"
+        )
 
         return google_request, url_suffix
 
@@ -152,7 +308,45 @@ class RequestConverter:
         return None
 
     @staticmethod
-    def extract_system_instruction(messages: List[Dict]) -> Tuple[Optional[Dict], List[Dict]]:
+    def is_enable_thinking(model: Optional[str]) -> bool:
+        if not model:
+            return False
+        name = str(model).lower()
+        return (
+            "-thinking" in name
+            or name == "gemini-2.5-pro"
+            or name.startswith("gemini-3-pro-")
+            or name == "rev19-uic3-1p"
+            or name == "gpt-oss-120b-medium"
+        )
+
+    @staticmethod
+    def get_thinking_budget(openai_request: Dict, enable_thinking: bool) -> int:
+        if not enable_thinking:
+            return 0
+
+        raw_budget = openai_request.get("thinking_budget")
+        if raw_budget is not None:
+            try:
+                return int(raw_budget)
+            except (TypeError, ValueError):
+                return 1024
+
+        effort = openai_request.get("reasoning_effort")
+        if isinstance(effort, str):
+            mapped = RequestConverter.REASONING_EFFORT_MAP.get(effort.lower())
+            if mapped is not None:
+                return mapped
+
+        return 1024
+
+    @staticmethod
+    def extract_system_instruction(
+        messages: List[Dict],
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        enable_thinking: Optional[bool] = None,
+    ) -> Tuple[Optional[Dict], List[Dict]]:
         """
         从消息列表中提取 system 消息和普通消息
 
@@ -162,6 +356,10 @@ class RequestConverter:
         contents = []
         tool_call_info_map: Dict[str, Dict[str, str]] = {}
         collecting_system = True
+        if enable_thinking is None:
+            thinking_config = RequestConverter.determine_thinking_config(model)
+            enable_thinking = bool(thinking_config and thinking_config.get("includeThoughts"))
+        default_reasoning_signature = get_thought_signature_for_model(model)
 
         for msg in messages:
             role = msg.get("role")
@@ -193,7 +391,23 @@ class RequestConverter:
                     "parts": RequestConverter.convert_content_to_parts(content)
                 })
             elif role == "assistant":
-                parts = RequestConverter.convert_content_to_parts(content)
+                parts: List[Dict] = []
+
+                if enable_thinking:
+                    reasoning_text = msg.get("reasoning_content")
+                    if not isinstance(reasoning_text, str) or not reasoning_text:
+                        reasoning_text = " "
+                    reasoning_signature = msg.get("thoughtSignature") or msg.get("thought_signature")
+                    if not isinstance(reasoning_signature, str) or not reasoning_signature:
+                        reasoning_signature = (
+                            get_reasoning_signature(session_id, model)
+                            or default_reasoning_signature
+                        )
+                    parts.append({"text": reasoning_text, "thought": True})
+                    parts.append({"text": " ", "thoughtSignature": reasoning_signature})
+
+                if content is not None and not (isinstance(content, str) and content == ""):
+                    parts.extend(RequestConverter.convert_content_to_parts(content))
                 tool_calls = msg.get("tool_calls", [])
                 for tool_call in tool_calls:
                     if tool_call.get("type") != "function":
@@ -202,43 +416,60 @@ class RequestConverter:
                     func_name = func.get("name")
                     if not func_name:
                         continue
-                    tool_call_id = tool_call.get("id")
-                    signature = tool_call.get("thought_signature") or tool_call.get("thoughtSignature")
-                    if not signature and tool_call_id and not str(tool_call_id).startswith("call_"):
-                        signature = str(tool_call_id)
-                    if tool_call_id:
-                        tool_call_info_map[tool_call_id] = {
-                            "name": func_name,
-                            "thoughtSignature": signature
-                        }
-                        logger.info(
-                            "Mapped tool_call_id '%s' to function '%s' with signature '%s'",
-                            tool_call_id,
-                            func_name,
-                            signature
-                        )
-                    args_data = func.get("arguments", "{}")
-                    args = json.loads(args_data) if isinstance(args_data, str) else args_data
+                    tool_call_id = tool_call.get("id") or f"call_{uuid.uuid4().hex}"
+                    safe_name = sanitize_tool_name(func_name)
+                    if session_id and model and safe_name != func_name:
+                        set_tool_name_mapping(session_id, model, safe_name, func_name)
+
+                    signature = tool_call.get("thoughtSignature") or tool_call.get("thought_signature")
+                    if enable_thinking and (not isinstance(signature, str) or not signature):
+                        signature = get_tool_signature(session_id, model) or get_tool_thought_signature_for_model(model)
+                    tool_call_info_map[tool_call_id] = {
+                        "name": safe_name,
+                        "thoughtSignature": signature if isinstance(signature, str) else None,
+                    }
+
+                    args_data = func.get("arguments", {})
+                    if isinstance(args_data, str):
+                        try:
+                            args = json.loads(args_data) if args_data.strip() else {}
+                        except (json.JSONDecodeError, ValueError):
+                            args = {"query": args_data}
+                    elif isinstance(args_data, dict):
+                        args = args_data
+                    else:
+                        args = {}
+
                     part_entry = {
                         "functionCall": {
-                            "name": func_name,
+                            "id": tool_call_id,
+                            "name": safe_name,
                             "args": args
                         }
                     }
-                    if signature:
+                    if enable_thinking:
                         part_entry["thoughtSignature"] = signature
                     parts.append(part_entry)
 
                 contents.append({
                     "role": "model",
-                    "parts": parts
+                    "parts": parts or [{"text": ""}]
                 })
             elif role == "tool":
                 function_response = RequestConverter.convert_tool_message(msg, tool_call_info_map)
-                contents.append({
-                    "role": "user",
-                    "parts": [function_response]
-                })
+                last_entry = contents[-1] if contents else None
+                if (
+                    isinstance(last_entry, dict)
+                    and last_entry.get("role") == "user"
+                    and isinstance(last_entry.get("parts"), list)
+                    and any("functionResponse" in part for part in last_entry["parts"])
+                ):
+                    last_entry["parts"].append(function_response)
+                else:
+                    contents.append({
+                        "role": "user",
+                        "parts": [function_response]
+                    })
             else:
                 contents.append({
                     "role": "user",
@@ -337,44 +568,33 @@ class RequestConverter:
         """
         将 OpenAI 的 tool role 消息转换为 Gemini 的 functionResponse
         """
-        tool_name = msg.get("name", "")
         tool_call_id = msg.get("tool_call_id", "")
-        thought_signature = (
-            msg.get("thought_signature")
-            or msg.get("thoughtSignature")
-        )
+        info = tool_call_info_map.get(tool_call_id) if tool_call_id else None
 
-        if tool_call_id and tool_call_id in tool_call_info_map:
-            info = tool_call_info_map[tool_call_id]
-            tool_name = tool_name or info.get("name", "")
-            thought_signature = thought_signature or info.get("thoughtSignature")
-        elif tool_call_id and not thought_signature and not str(tool_call_id).startswith("call_"):
-            thought_signature = str(tool_call_id)
+        # functionResponse.name must match the previous functionCall.name (safe name).
+        tool_name = (info or {}).get("name") or msg.get("name", "")
+        if tool_name:
+            tool_name = sanitize_tool_name(tool_name)
 
         if not tool_name:
-            logger.warning("Tool message missing 'name' field: %s", msg)
-            if tool_call_id:
-                logger.warning("Found tool_call_id: %s, but cannot map to function name without context", tool_call_id)
             tool_name = "unknown_function"
 
-        response_data = msg.get("content")
-        if isinstance(response_data, str):
-            try:
-                response_data = json.loads(response_data)
-            except (json.JSONDecodeError, ValueError):
-                response_data = {"result": response_data}
-        elif not isinstance(response_data, dict):
-            response_data = {"result": str(response_data)}
+        content = msg.get("content")
+        if isinstance(content, (dict, list)):
+            output = json.dumps(content, ensure_ascii=False)
+        elif content is None:
+            output = ""
+        else:
+            output = str(content)
 
-        part = {
-            "functionResponse": {
-                "name": tool_name,
-                "response": response_data
-            }
+        function_response: Dict = {
+            "name": tool_name,
+            "response": {"output": output},
         }
-        if thought_signature:
-            part["thoughtSignature"] = thought_signature
-        return part
+        if tool_call_id:
+            function_response["id"] = tool_call_id
+
+        return {"functionResponse": function_response}
 
     def normalize_schema(schema: Dict) -> Dict:
         """
@@ -532,7 +752,7 @@ class RequestConverter:
         if not isinstance(schema, dict):
             return schema
 
-        # 去除多余元数据字段（保留 $ref/$defs 等结构性引用）
+        # Remove unsupported metadata fields while keeping structural refs ($ref/$defs).
         metadata_fields = ['$schema', '$id', '$comment']
         for field in metadata_fields:
             schema.pop(field, None)
@@ -570,6 +790,24 @@ class RequestConverter:
         return schema
 
     @staticmethod
+    def clean_tool_parameters_schema(obj):
+        """
+        Clean tool JSON schema to match upstream expectations.
+
+        Aligned with NodeJS implementation: drop unsupported keys aggressively.
+        """
+        if isinstance(obj, dict):
+            cleaned = {}
+            for key, value in obj.items():
+                if key in RequestConverter.EXCLUDED_SCHEMA_KEYS:
+                    continue
+                cleaned[key] = RequestConverter.clean_tool_parameters_schema(value)
+            return cleaned
+        if isinstance(obj, list):
+            return [RequestConverter.clean_tool_parameters_schema(item) for item in obj]
+        return obj
+
+    @staticmethod
     def convert_tool_choice(tool_choice, tools: List[Dict] = None) -> Dict:
         """
         将 OpenAI 的 tool_choice 转换为 Google Gemini 的 toolConfig
@@ -585,49 +823,16 @@ class RequestConverter:
         Returns:
             Google 格式的 toolConfig
         """
-        if not tool_choice:
-            # 默认为 AUTO
-            return {
-                "functionCallingConfig": {
-                    "mode": "AUTO"
-                }
-            }
-
-        if isinstance(tool_choice, str):
-            # 字符串模式: "auto", "required", "none"
-            mode_mapping = {
-                "auto": "AUTO",
-                "required": "ANY",
-                "none": "NONE"
-            }
-            mode = mode_mapping.get(tool_choice.lower(), "AUTO")
-            return {
-                "functionCallingConfig": {
-                    "mode": mode
-                }
-            }
-
-        elif isinstance(tool_choice, dict):
-            # 对象模式: {"type": "function", "function": {"name": "xxx"}}
-            if tool_choice.get("type") == "function":
-                func_name = tool_choice.get("function", {}).get("name")
-                if func_name:
-                    return {
-                        "functionCallingConfig": {
-                            "mode": "ANY",
-                            "allowedFunctionNames": [func_name]
-                        }
-                    }
-
-        # 默认返回 AUTO
-        return {
-            "functionCallingConfig": {
-                "mode": "AUTO"
-            }
-        }
+        _ = tool_choice
+        _ = tools
+        return {"functionCallingConfig": {"mode": "VALIDATED"}}
 
     @staticmethod
-    def convert_tools(openai_tools: List[Dict]) -> List[Dict]:
+    def convert_tools(
+        openai_tools: List[Dict],
+        session_id: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> List[Dict]:
         """
         将 OpenAI 格式的 tools 转换为 Google Gemini 格式
 
@@ -653,34 +858,48 @@ class RequestConverter:
         if not openai_tools:
             return []
 
-        function_declarations = []
+        converted: List[Dict] = []
         for tool in openai_tools:
-            if tool.get("type") == "function":
-                func = tool.get("function", {})
-                parameters = func.get("parameters", {})
-                if isinstance(parameters, dict):
-                    parameters = copy.deepcopy(parameters)
-                    parameters = RequestConverter.clean_schema_metadata(parameters)
-                    parameters = RequestConverter.normalize_schema(parameters)
-                else:
-                    parameters = {}
+            if tool.get("type") != "function":
+                continue
 
-                tool_name = func.get("name") or "unnamed_function"
-                if not RequestConverter.validate_schema(parameters, tool_name):
-                    logger.warning("Skipping tool %s due to invalid schema", tool_name)
-                    continue
+            func = tool.get("function") or {}
+            original_name = func.get("name") or "unnamed_function"
+            safe_name = sanitize_tool_name(original_name)
+            if session_id and model and safe_name != original_name:
+                set_tool_name_mapping(session_id, model, safe_name, original_name)
 
-                function_declarations.append({
-                    "name": func.get("name"),
-                    "description": func.get("description", ""),
-                    "parameters": parameters
-                })
-        if not function_declarations:
-            return []
+            parameters = func.get("parameters") or {}
+            if isinstance(parameters, dict):
+                parameters = copy.deepcopy(parameters)
+                parameters = RequestConverter.clean_tool_parameters_schema(parameters)
+            else:
+                parameters = {}
 
-        return [{
-            "functionDeclarations": function_declarations
-        }]
+            if parameters.get("type") is None:
+                parameters["type"] = "object"
+            if parameters.get("type") == "object" and not isinstance(parameters.get("properties"), dict):
+                parameters["properties"] = {}
+
+            parameters = RequestConverter.normalize_schema(parameters)
+
+            if not RequestConverter.validate_schema(parameters, safe_name):
+                logger.warning("Skipping tool %s due to invalid schema", safe_name)
+                continue
+
+            converted.append(
+                {
+                    "functionDeclarations": [
+                        {
+                            "name": safe_name,
+                            "description": func.get("description", ""),
+                            "parameters": parameters,
+                        }
+                    ]
+                }
+            )
+
+        return converted
 
     @staticmethod
     def log_conversion_summary(openai_request: Dict, google_request: Dict) -> None:
@@ -714,7 +933,8 @@ class ResponseConverter:
     async def google_sse_to_openai(
         google_stream: AsyncIterator[str],
         model: str,
-        request_id: Optional[str] = None
+        request_id: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         将 Google SSE 流式响应转换为 OpenAI 格式
@@ -733,6 +953,7 @@ class ResponseConverter:
         created = int(time.time())
         finish_reason = None
         usage_metadata = None
+        state_reasoning_signature = get_reasoning_signature(session_id, model) if session_id else None
 
         async for line in google_stream:
             line = line.strip()
@@ -783,39 +1004,64 @@ class ResponseConverter:
                 delta: Dict = {}
                 text_parts: List[str] = []
                 reasoning_parts: List[str] = []
+                reasoning_signature: Optional[str] = None
 
                 for part in parts:
                     if part.get("thought") is True:
                         reasoning_parts.append(part.get("text", ""))
+                        sig = part.get("thoughtSignature")
+                        if isinstance(sig, str) and sig:
+                            reasoning_signature = sig
                         continue
 
-                    if "text" in part:
-                        # 文本内容
-                        text_parts.append(part.get("text", ""))
-                    elif "functionCall" in part:
-                        # 函数调用
-                        func_call = part["functionCall"]
+                    if "functionCall" in part:
+                        func_call = part.get("functionCall") or {}
                         thought_signature = part.get("thoughtSignature") or func_call.get("thoughtSignature")
                         if "tool_calls" not in delta:
                             delta["tool_calls"] = []
-                        call_id = thought_signature or f"call_{uuid.uuid4().hex[:24]}"
+
+                        call_id = func_call.get("id") or f"call_{uuid.uuid4().hex[:24]}"
+                        name = func_call.get("name", "")
+                        if session_id and name:
+                            original = get_original_tool_name(session_id, model, name)
+                            if original:
+                                name = original
+
                         tool_call_entry = {
                             "index": len(delta["tool_calls"]),
                             "id": call_id,
                             "type": "function",
                             "function": {
-                                "name": func_call.get("name", ""),
-                                "arguments": json.dumps(func_call.get("args", {}))
-                            }
+                                "name": name,
+                                "arguments": json.dumps(func_call.get("args", {})),
+                            },
                         }
                         if thought_signature:
-                            tool_call_entry["thought_signature"] = thought_signature
+                            tool_call_entry["thoughtSignature"] = thought_signature
+                            if session_id:
+                                set_tool_signature(session_id, model, thought_signature)
                         delta["tool_calls"].append(tool_call_entry)
+                        continue
+
+                    if "thoughtSignature" in part:
+                        sig = part.get("thoughtSignature")
+                        if isinstance(sig, str) and sig:
+                            reasoning_signature = sig
+                        continue
+
+                    if "text" in part:
+                        text_parts.append(part.get("text", ""))
 
                 if text_parts:
                     delta["content"] = "".join(text_parts)
                 if reasoning_parts:
                     delta["reasoning_content"] = "".join(reasoning_parts)
+                if reasoning_signature:
+                    state_reasoning_signature = reasoning_signature
+                    if session_id:
+                        set_reasoning_signature(session_id, model, reasoning_signature)
+                if state_reasoning_signature and (reasoning_parts or reasoning_signature):
+                    delta["thoughtSignature"] = state_reasoning_signature
 
                 # 构建 OpenAI 格式的 chunk
                 openai_chunk = {
@@ -868,7 +1114,14 @@ class ResponseConverter:
         return mapping.get(google_reason, "stop")
 
     @staticmethod
-    def google_non_stream_to_openai(google_response: Dict, model: str) -> Dict:
+    def google_non_stream_to_openai(
+        google_response: Dict,
+        model: str,
+        session_id: Optional[str] = None,
+        image_base_url: Optional[str] = None,
+        image_dir: str = "data/images",
+        max_images: int = 10,
+    ) -> Dict:
         """
         将 Google 非流式响应转换为 OpenAI 格式
 
@@ -881,6 +1134,7 @@ class ResponseConverter:
         """
         request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         created = int(time.time())
+        state_reasoning_signature = get_reasoning_signature(session_id, model) if session_id else None
 
         # 提取响应内容（Google 非流式响应可能包装在 "response" 字段中）
         if "response" in google_response:
@@ -919,33 +1173,79 @@ class ResponseConverter:
             text_parts: List[str] = []
             reasoning_parts: List[str] = []
             tool_calls = []
+            image_urls: List[str] = []
+            reasoning_signature: Optional[str] = None
 
             for part in parts:
                 if part.get("thought") is True:
                     reasoning_parts.append(part.get("text", ""))
+                    sig = part.get("thoughtSignature")
+                    if isinstance(sig, str) and sig:
+                        reasoning_signature = sig
                 elif "text" in part:
                     text_parts.append(part.get("text", ""))
                 elif "functionCall" in part:
-                    func_call = part["functionCall"]
+                    func_call = part.get("functionCall") or {}
                     thought_signature = part.get("thoughtSignature") or func_call.get("thoughtSignature")
-                    call_id = thought_signature or f"call_{uuid.uuid4().hex[:24]}"
+                    call_id = func_call.get("id") or f"call_{uuid.uuid4().hex[:24]}"
+                    name = func_call.get("name", "")
+                    if session_id and name:
+                        original = get_original_tool_name(session_id, model, name)
+                        if original:
+                            name = original
                     tool_call_entry = {
                         "id": call_id,
                         "type": "function",
                         "function": {
-                            "name": func_call.get("name", ""),
+                            "name": name,
                             "arguments": json.dumps(func_call.get("args", {}))
                         }
                     }
                     if thought_signature:
-                        tool_call_entry["thought_signature"] = thought_signature
+                        tool_call_entry["thoughtSignature"] = thought_signature
+                        if session_id:
+                            set_tool_signature(session_id, model, thought_signature)
                     tool_calls.append(tool_call_entry)
+                elif "thoughtSignature" in part:
+                    sig = part.get("thoughtSignature")
+                    if isinstance(sig, str) and sig:
+                        reasoning_signature = sig
+                elif "inlineData" in part:
+                    inline = part.get("inlineData") or {}
+                    data_b64 = inline.get("data")
+                    mime_type = inline.get("mimeType")
+                    if not data_b64:
+                        continue
+                    try:
+                        filename = save_base64_image(
+                            base64_data=str(data_b64),
+                            mime_type=str(mime_type) if mime_type is not None else None,
+                            image_dir=image_dir,
+                            max_images=max_images,
+                        )
+                        base = (image_base_url or "").rstrip("/")
+                        image_urls.append(f"{base}/images/{filename}" if base else f"/images/{filename}")
+                    except Exception as exc:
+                        logger.warning("Failed to save inlineData image: %s", exc)
 
             # 添加内容到 message
-            if text_parts:
-                message["content"] = "".join(text_parts)
+            content_text = "".join(text_parts) if text_parts else ""
+            if image_urls:
+                chunks: List[str] = []
+                if content_text:
+                    chunks.append(content_text)
+                chunks.extend([f"![image]({url})" for url in image_urls])
+                message["content"] = "\n\n".join(chunks)
+            elif content_text:
+                message["content"] = content_text
             if reasoning_parts:
                 message["reasoning_content"] = "".join(reasoning_parts)
+            if reasoning_signature:
+                state_reasoning_signature = reasoning_signature
+                if session_id:
+                    set_reasoning_signature(session_id, model, reasoning_signature)
+            if state_reasoning_signature and (reasoning_parts or reasoning_signature):
+                message["thoughtSignature"] = state_reasoning_signature
             if tool_calls:
                 message["tool_calls"] = tool_calls
 
