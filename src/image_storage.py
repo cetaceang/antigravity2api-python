@@ -61,7 +61,16 @@ def save_base64_image(
     if not normalized:
         raise ValueError("empty image payload")
 
-    raw = base64.b64decode(normalized, validate=False)
+    # Upstream may return base64url (using '-' and '_') and/or omit '=' padding.
+    compact = "".join(normalized.split())
+    if not compact:
+        raise ValueError("empty image payload")
+
+    padded = compact + ("=" * (-len(compact) % 4))
+    try:
+        raw = base64.urlsafe_b64decode(padded)
+    except Exception as exc:
+        raise ValueError("invalid base64 image payload") from exc
 
     ext = _MIME_EXT.get((mime_type or "").lower(), "bin")
     ts_ms = int(time.time() * 1000)
@@ -82,4 +91,3 @@ def save_base64_image(
     tmp_path.replace(path)
     _prune_old_files(target_dir, int(max_images))
     return filename
-

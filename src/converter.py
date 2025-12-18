@@ -1226,7 +1226,12 @@ class ResponseConverter:
                         base = (image_base_url or "").rstrip("/")
                         image_urls.append(f"{base}/images/{filename}" if base else f"/images/{filename}")
                     except Exception as exc:
-                        logger.warning("Failed to save inlineData image: %s", exc)
+                        logger.info(
+                            "Failed to save inlineData image: %s (mime_type=%s, data_len=%s)",
+                            exc,
+                            mime_type,
+                            len(str(data_b64)),
+                        )
 
             # 添加内容到 message
             content_text = "".join(text_parts) if text_parts else ""

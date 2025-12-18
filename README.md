@@ -171,6 +171,8 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+Docker 部署时默认 `WORKDIR=/app`，因此 `IMAGE_DIR=data/images` 会落到 `/app/data/images`；配合 `docker-compose.yml` 的 `./data:/app/data` 挂载即可在宿主机 `./data/images/` 持久化。
+
 ### 使用 curl
 
 ```bash
