@@ -1206,10 +1206,6 @@ class ResponseConverter:
                         if session_id:
                             set_tool_signature(session_id, model, thought_signature)
                     tool_calls.append(tool_call_entry)
-                elif "thoughtSignature" in part:
-                    sig = part.get("thoughtSignature")
-                    if isinstance(sig, str) and sig:
-                        reasoning_signature = sig
                 elif "inlineData" in part:
                     inline = part.get("inlineData") or {}
                     data_b64 = inline.get("data")
@@ -1232,6 +1228,13 @@ class ResponseConverter:
                             mime_type,
                             len(str(data_b64)),
                         )
+                    sig = part.get("thoughtSignature")
+                    if isinstance(sig, str) and sig:
+                        reasoning_signature = sig
+                elif "thoughtSignature" in part:
+                    sig = part.get("thoughtSignature")
+                    if isinstance(sig, str) and sig:
+                        reasoning_signature = sig
 
             # 添加内容到 message
             content_text = "".join(text_parts) if text_parts else ""

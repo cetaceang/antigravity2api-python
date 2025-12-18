@@ -130,10 +130,53 @@ def test_inline_data_urlsafe_without_padding_is_persisted():
         assert created_files[0].suffix == ".png"
 
 
+def test_inline_data_with_thought_signature_is_persisted():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        google_response = {
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "role": "model",
+                            "parts": [
+                                {
+                                    "inlineData": {"mimeType": "image/png", "data": _png_1x1_base64()},
+                                    "thoughtSignature": "sig-123",
+                                }
+                            ],
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            }
+        }
+
+        openai_response = ResponseConverter.google_non_stream_to_openai(
+            google_response=google_response,
+            model="gemini-3-pro-image",
+            session_id="s123",
+            image_base_url="http://localhost:8000",
+            image_dir=str(tmp),
+            max_images=10,
+        )
+
+        message = openai_response["choices"][0]["message"]
+        assert "![image](" in message.get("content", "")
+        assert "/images/" in message.get("content", "")
+        assert message.get("thoughtSignature") == "sig-123"
+
+        created_files = list(tmp.iterdir())
+        assert len(created_files) == 1
+        assert created_files[0].suffix == ".png"
+
+
 def main():
     test_image_request_is_converted_to_image_gen()
     test_inline_data_is_persisted_and_returned_as_markdown()
     test_inline_data_urlsafe_without_padding_is_persisted()
+    test_inline_data_with_thought_signature_is_persisted()
     print("OK")
 
 
