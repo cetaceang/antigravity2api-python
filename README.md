@@ -220,7 +220,7 @@ OpenAI 兼容的聊天补全端点。
 
 #### 思考配置策略
 - 服务端会在上游 `generationConfig.thinkingConfig` 中写入 `includeThoughts` 与 `thinkingBudget`。
-- 启用条件（对齐 Node 版本）：`model` 包含 `-thinking`，或为 `gemini-2.5-pro` / `gemini-3-pro-*` / `rev19-uic3-1p` / `gpt-oss-120b-medium`。
+- 启用条件：`model` 包含 `-thinking`，或为 `gemini-2.5-pro` / `gemini-3-pro-*` / `rev19-uic3-1p` / `gpt-oss-120b-medium`。
 - `thinkingBudget` 优先使用请求参数 `thinking_budget`（整数）；其次使用 `reasoning_effort`（low=1024, medium=16000, high=32000）；否则默认 1024；未启用时为 0。
 - 当上游模型返回 `{"thought": true, "text": "..."}` 片段时，会在 OpenAI 响应中填充 `reasoning_content` 字段（拼接后的纯文本），方便客户端分别展示思考与正文。
 
