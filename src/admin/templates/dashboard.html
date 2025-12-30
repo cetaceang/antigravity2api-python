@@ -258,8 +258,18 @@ function renderModelList(models) {
 
 function formatResetTime(isoString) {
     if (!isoString) return '-';
-    const date = new Date(isoString);
-    return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+    // UTC 转北京时间 (UTC+8)
+    const utcDate = new Date(isoString);
+    const beijingDate = new Date(utcDate.getTime() + 8 * 60 * 60 * 1000);
+
+    const year = beijingDate.getUTCFullYear();
+    const month = beijingDate.getUTCMonth() + 1;
+    const day = beijingDate.getUTCDate();
+    const hours = beijingDate.getUTCHours().toString().padStart(2, '0');
+    const minutes = beijingDate.getUTCMinutes().toString().padStart(2, '0');
+
+    return year + '/' + month + '/' + day + ' ' + hours + ':' + minutes;
 }
 </script>
 {% endblock %}
