@@ -147,19 +147,6 @@ async def chat_completions(
     is_stream = openai_request.get("stream", False)
 
     if is_stream:
-        if is_image_model:
-            return StreamingResponse(
-                stream_image_to_openai(
-                    url=url,
-                    headers=headers,
-                    google_request=google_request,
-                    model=model_name,
-                    project=project,
-                    image_base_url=image_base_url,
-                ),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-            )
         return StreamingResponse(
             stream_google_to_openai(
                 url=url,
@@ -167,19 +154,22 @@ async def chat_completions(
                 google_request=google_request,
                 model=model_name,
                 project=project,
+                image_base_url=image_base_url,
+                image_dir=str(IMAGE_DIR),
+                max_images=MAX_IMAGES,
             ),
             media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
-    else:
-        # 非流式响应
-        return await handle_non_stream_request(
-            url=url,
-            headers=headers,
-            google_request=google_request,
-            model=model_name,
-            project=project,
-            image_base_url=image_base_url,
-        )
+
+    return await handle_non_stream_via_stream_request(
+        url=url,
+        headers=headers,
+        google_request=google_request,
+        model=model_name,
+        project=project,
+        image_base_url=image_base_url,
+    )
 
 
 @app.post("/v1/models/{model}:generateContent")
@@ -317,6 +307,38 @@ async def handle_non_stream_request(
             raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
 
+async def handle_non_stream_via_stream_request(
+    url: str,
+    headers: dict,
+    google_request: dict,
+    model: str,
+    project: ProjectToken,
+    image_base_url: str,
+):
+    """
+    Aggregate an upstream SSE response into a non-stream OpenAI response.
+    """
+    try:
+        openai_stream = stream_google_to_openai(
+            url=url,
+            headers=headers,
+            google_request=google_request,
+            model=model,
+            project=project,
+            image_base_url=image_base_url,
+            image_dir=str(IMAGE_DIR),
+            max_images=MAX_IMAGES,
+        )
+        return await ResponseConverter.openai_sse_to_non_stream(openai_stream)
+    except RuntimeError as exc:
+        detail = str(exc)
+        if "timeout" in detail.lower():
+            raise HTTPException(status_code=504, detail=detail)
+        raise HTTPException(status_code=502, detail=detail)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error: {exc}")
+
+
 async def stream_image_to_openai(
     url: str,
     headers: dict,
@@ -424,7 +446,10 @@ async def stream_google_to_openai(
     headers: dict,
     google_request: dict,
     model: str,
-    project: ProjectToken
+    project: ProjectToken,
+    image_base_url: Optional[str] = None,
+    image_dir: str = "data/images",
+    max_images: int = 10,
 ):
     """
     流式代理：Google SSE → OpenAI SSE
@@ -481,6 +506,9 @@ async def stream_google_to_openai(
                             retry_response.aiter_lines(),
                             model,
                             session_id=getattr(project, "session_id", None),
+                            image_base_url=image_base_url,
+                            image_dir=image_dir,
+                            max_images=max_images,
                         ):
                             yield chunk
                     return
@@ -497,6 +525,9 @@ async def stream_google_to_openai(
                     response.aiter_lines(),
                     model,
                     session_id=getattr(project, "session_id", None),
+                    image_base_url=image_base_url,
+                    image_dir=image_dir,
+                    max_images=max_images,
                 ):
                     yield chunk
 

@@ -1,6 +1,7 @@
 import json
 import uuid
 import logging
+import json
 from typing import Dict, Any, AsyncIterator
 
 import httpx
@@ -63,29 +64,58 @@ async def proxy_gemini_non_stream(google_request: Dict[str, Any], project: Proje
         "Accept-Encoding": "gzip",
         "User-Agent": "antigravity/1.11.3 windows/amd64"
     }
-    url = get_gemini_url(stream=False)
+    url = get_gemini_url(stream=True)
 
     async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(url, headers=headers, json=google_request)
-
-        if response.status_code in (401, 403):
-            logger.warning(f"Auth error {response.status_code}, refreshing token for {project.project_id}")
-            new_token = await token_manager.handle_auth_error(project)
-            headers["Authorization"] = f"Bearer {new_token}"
-            response = await client.post(url, headers=headers, json=google_request)
+        async with client.stream("POST", url, headers=headers, json=google_request) as response:
             if response.status_code in (401, 403):
-                token_manager.disable_project(
-                    project,
-                    f"Auth failed after token refresh: {response.status_code}"
+                logger.warning(f"Auth error {response.status_code}, refreshing token for {project.project_id}")
+                new_token = await token_manager.handle_auth_error(project)
+                headers["Authorization"] = f"Bearer {new_token}"
+                async with client.stream("POST", url, headers=headers, json=google_request) as retry_response:
+                    if retry_response.status_code in (401, 403):
+                        token_manager.disable_project(
+                            project,
+                            f"Auth failed after token refresh: {retry_response.status_code}"
+                        )
+                    if retry_response.status_code != 200:
+                        error_body = await retry_response.aread()
+                        raise HTTPException(
+                            status_code=retry_response.status_code,
+                            detail=f"Google API error: {error_body.decode('utf-8', errors='ignore')}",
+                        )
+                    return await _collect_gemini_sse_payload(retry_response.aiter_lines())
+
+            if response.status_code != 200:
+                error_body = await response.aread()
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Google API error: {error_body.decode('utf-8', errors='ignore')}",
                 )
 
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Google API error: {response.text}"
-            )
+            return await _collect_gemini_sse_payload(response.aiter_lines())
 
-        return unwrap_response_payload(response.json())
+
+async def _collect_gemini_sse_payload(lines: AsyncIterator[str]) -> Dict[str, Any]:
+    last_payload: Any = None
+    async for line in lines:
+        if not line:
+            continue
+        if not line.startswith("data:"):
+            continue
+        payload = line.split("data:", 1)[1].strip()
+        if payload.strip() == "[DONE]":
+            break
+        try:
+            data_obj = json.loads(payload)
+        except Exception:
+            continue
+        last_payload = unwrap_response_payload(data_obj)
+    if last_payload is None:
+        raise HTTPException(status_code=502, detail="Empty SSE response")
+    if isinstance(last_payload, dict):
+        return last_payload
+    return {"response": last_payload}
 
 
 async def stream_gemini_raw(
@@ -123,12 +153,12 @@ async def stream_gemini_raw(
                         logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
                         yield f"data: {{\"error\": \"Auth failed, project disabled\"}}\n\n"
                         return
-                        if retry_response.status_code != 200:
-                            error_body = await retry_response.aread()
-                            logger.error(f"Google API error {retry_response.status_code} (retry)")
-                            logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
-                            yield f"data: {{\"error\": \"Google API error: {retry_response.status_code}\"}}\n\n"
-                            return
+                    if retry_response.status_code != 200:
+                        error_body = await retry_response.aread()
+                        logger.error(f"Google API error {retry_response.status_code} (retry)")
+                        logger.error(f"Error response: {error_body.decode('utf-8', errors='ignore')}")
+                        yield f"data: {{\"error\": \"Google API error: {retry_response.status_code}\"}}\n\n"
+                        return
                     async for line in retry_response.aiter_lines():
                         if not line:
                             continue
