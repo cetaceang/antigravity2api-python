@@ -46,7 +46,7 @@ def test_image_request_is_converted_to_image_gen():
         session_id="s123",
     )
 
-    assert url_suffix == "/v1internal:streamGenerateContent?alt=sse"
+    assert url_suffix == "/v1internal:generateContent"
     assert google_request.get("requestType") == "image_gen"
     assert google_request["request"]["generationConfig"] == {"candidateCount": 1}
     assert "tools" not in google_request["request"]

@@ -147,6 +147,19 @@ async def chat_completions(
     is_stream = openai_request.get("stream", False)
 
     if is_stream:
+        if is_image_model:
+            return StreamingResponse(
+                stream_image_to_openai(
+                    url=url,
+                    headers=headers,
+                    google_request=google_request,
+                    model=model_name,
+                    project=project,
+                    image_base_url=image_base_url,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
         return StreamingResponse(
             stream_google_to_openai(
                 url=url,
@@ -160,6 +173,16 @@ async def chat_completions(
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+
+    if is_image_model:
+        return await handle_non_stream_request(
+            url=url,
+            headers=headers,
+            google_request=google_request,
+            model=model_name,
+            project=project,
+            image_base_url=image_base_url,
         )
 
     return await handle_non_stream_via_stream_request(

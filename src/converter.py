@@ -299,7 +299,10 @@ class RequestConverter:
         # URL 后缀
         # 流式：使用 streamGenerateContent + alt=sse
         # 非流式：使用 generateContent
-        url_suffix = "/v1internal:streamGenerateContent?alt=sse"
+        if is_image_model:
+            url_suffix = "/v1internal:generateContent"
+        else:
+            url_suffix = "/v1internal:streamGenerateContent?alt=sse"
 
         return google_request, url_suffix
 
