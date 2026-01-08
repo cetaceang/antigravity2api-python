@@ -272,11 +272,12 @@ class RequestConverter:
         if session_id:
             google_request["request"]["sessionId"] = session_id
 
-        # 添加 systemInstruction
-        google_request["request"]["systemInstruction"] = {
-            "role": "user",
-            "parts": [{"text": UPSTREAM_REQUIRED_SYSTEM_PROMPT}],
-        }
+        if not is_image_model:
+            # 添加 systemInstruction (required by upstream validation for non-image models).
+            google_request["request"]["systemInstruction"] = {
+                "role": "user",
+                "parts": [{"text": UPSTREAM_REQUIRED_SYSTEM_PROMPT}],
+            }
 
         # 添加 generationConfig
         if generation_config:
