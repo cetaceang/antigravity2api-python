@@ -389,6 +389,57 @@ def test_response_signature_passthrough_stream():
     assert get_tool_signature(session_id, model) == "sig_tool"
 
 
+def test_response_signature_passthrough_stream_accepts_unwrapped_payload():
+    clear_tool_name_mappings()
+    clear_signature_caches()
+
+    session_id = "s123"
+    model = "gemini-2.5-flash-thinking"
+    set_tool_name_mapping(session_id, model, "safe_name", "original_name")
+
+    unwrapped_payload = {
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        {"thought": True, "text": "r", "thoughtSignature": "sig_reason"},
+                        {"functionCall": {"id": "call_1", "name": "safe_name", "args": {"x": 1}}, "thoughtSignature": "sig_tool"},
+                        {"text": "t"},
+                    ]
+                },
+                "finishReason": "STOP",
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+    }
+
+    async def run():
+        chunks = []
+        async for out in ResponseConverter.google_sse_to_openai(
+            _agen([f"data: {json.dumps(unwrapped_payload)}", "data: [DONE]"]),
+            model=model,
+            request_id="chatcmpl-test",
+            session_id=session_id,
+        ):
+            chunks.append(out)
+        return chunks
+
+    chunks = asyncio.run(run())
+    data_lines = [c for c in chunks if c.startswith("data: {")]
+    assert data_lines, "expected at least one json chunk"
+    payload = json.loads(data_lines[0][6:].strip())
+    delta = payload["choices"][0]["delta"]
+    assert delta["reasoning_content"] == "r"
+    assert delta["thoughtSignature"] == "sig_reason"
+    assert delta["content"] == "t"
+    assert delta["tool_calls"][0]["id"] == "call_1"
+    assert delta["tool_calls"][0]["thoughtSignature"] == "sig_tool"
+    assert delta["tool_calls"][0]["function"]["name"] == "original_name"
+
+    assert get_reasoning_signature(session_id, model) == "sig_reason"
+    assert get_tool_signature(session_id, model) == "sig_tool"
+
+
 def test_signature_cache_ttl_and_size_limits():
     import src.signature_cache as sig_cache
 

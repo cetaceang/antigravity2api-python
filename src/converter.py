@@ -980,7 +980,10 @@ class ResponseConverter:
             try:
                 # 解析 Google 响应
                 google_data = json.loads(json_str)
-                response = google_data.get("response", {})
+                response = google_data.get("response") if isinstance(google_data, dict) else None
+                if not isinstance(response, dict):
+                    response = google_data if isinstance(google_data, dict) else {}
+
                 candidates = response.get("candidates", [])
 
                 if not candidates:
